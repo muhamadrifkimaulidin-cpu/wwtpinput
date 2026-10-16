@@ -433,6 +433,7 @@ function switchInputMod(k) {
   S.inputMod = k;
   renderModTabs('inputModTabs', k, 'switchInputMod');
   renderEntryForm();
+  window.scrollTo(0, 0);
 }
 function renderEntryForm() {
   $('entryForm').innerHTML = renderForm(S.inputMod, {}, S.form.shift, 'f_');
@@ -551,7 +552,7 @@ function resetDataFilters() {
   loadData(1);
 }
 function debounceData() { clearTimeout(S.searchTimer); S.searchTimer = setTimeout(function() { loadData(1); }, 400); }
-function switchDataMod(k) { S.dataMod = k; renderModTabs('dataModTabs', k, 'switchDataMod'); loadData(1); }
+function switchDataMod(k) { S.dataMod = k; renderModTabs('dataModTabs', k, 'switchDataMod'); loadData(1); window.scrollTo(0, 0); }
 
 function loadData(page) {
   S.dataPage = page || 1;
