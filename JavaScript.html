@@ -1,0 +1,683 @@
+<script>
+/* ============================================
+   JavaScript — WWTP Operations System
+   App Logic, CRUD, Dashboard, Navigation
+   FIXED: FM validation, fm_leaching edit, error handling
+   ============================================ */
+
+// ========== STATE ==========
+var currentUser = null;
+var currentPage = 1;
+var editingRecordId = null;
+var deletingRecordId = null;
+var deletingRecordInfo = '';
+var searchTimeout = null;
+var charts = {};
+var DB_DEFAULT_DAYS = 10;
+
+// ========== INITIALIZATION ==========
+document.addEventListener('DOMContentLoaded', function() {
+  var saved = sessionStorage.getItem('wwtp_user');
+  if (saved) { try { currentUser = JSON.parse(saved); showMainApp(); } catch(e) { showLoginScreen(); } }
+  else { showLoginScreen(); }
+});
+
+// ========== AUTH ==========
+var loginTimer_ = null, loginSeconds_ = 0;
+
+function handleLogin() {
+  var name = document.getElementById('loginName').value.trim();
+  var pass = document.getElementById('loginPassword').value.trim();
+  var errEl = document.getElementById('loginError'); errEl.textContent = '';
+  if (!name || !pass) { errEl.textContent = 'Mohon isi nama dan password.'; return; }
+  var btn = document.getElementById('btnLogin'); btn.disabled = true; loginSeconds_ = 0;
+  updateLoginBtn_('Menghubungi server...');
+  loginTimer_ = setInterval(function() {
+    loginSeconds_++;
+    if (loginSeconds_ <= 3) updateLoginBtn_('Menghubungi server...');
+    else if (loginSeconds_ <= 8) updateLoginBtn_('Memverifikasi... (' + loginSeconds_ + 's)');
+    else if (loginSeconds_ <= 15) updateLoginBtn_('Server lambat... (' + loginSeconds_ + 's)');
+    else { clearInterval(loginTimer_); btn.disabled = false; btn.innerHTML = '<span class="material-icons-round">refresh</span> Coba Lagi'; errEl.textContent = 'Server tidak merespon. Klik Coba Lagi.'; }
+  }, 1000);
+  google.script.run
+    .withSuccessHandler(function(res) {
+      clearInterval(loginTimer_); btn.disabled = false; btn.innerHTML = '<span class="material-icons-round">login</span> Masuk';
+      if (res && res.success) { currentUser = res.user; sessionStorage.setItem('wwtp_user', JSON.stringify(currentUser)); showMainApp(); }
+      else { errEl.textContent = (res && res.message) || 'Login gagal.'; }
+    })
+    .withFailureHandler(function() { clearInterval(loginTimer_); btn.disabled = false; btn.innerHTML = '<span class="material-icons-round">refresh</span> Coba Lagi'; errEl.textContent = 'Koneksi gagal. Klik Coba Lagi.'; })
+    .loginUser(name, pass);
+}
+function updateLoginBtn_(text) { document.getElementById('btnLogin').innerHTML = '<span class="material-icons-round">hourglass_top</span> ' + text; }
+function handleLogout() { currentUser = null; sessionStorage.removeItem('wwtp_user'); showLoginScreen(); }
+function showLoginScreen() { document.getElementById('loginScreen').classList.add('active'); document.getElementById('mainApp').classList.remove('active'); document.getElementById('loginName').value = ''; document.getElementById('loginPassword').value = ''; document.getElementById('loginError').textContent = ''; }
+function isVisitor() { return currentUser && currentUser.role === 'visitor'; }
+
+function showMainApp() {
+  document.getElementById('loginScreen').classList.remove('active');
+  document.getElementById('mainApp').classList.add('active');
+  document.getElementById('headerUserName').textContent = currentUser.nama;
+  var sbu = document.getElementById('sidebarUserName'); if (sbu) sbu.textContent = currentUser.nama;
+  var today = new Date().toISOString().split('T')[0];
+  var hour = new Date().getHours();
+  var shift = (hour >= 6 && hour < 14) ? 1 : (hour >= 14 && hour < 22) ? 2 : 3;
+  document.getElementById('f_tanggal').value = today;
+  document.getElementById('f_nama').value = currentUser.nama;
+  selectShift(shift, true);
+  if (isVisitor()) {
+    var submitBtn = document.getElementById('btnSubmitTop'); if (submitBtn) submitBtn.style.display = 'none';
+    document.querySelectorAll('#dataForm input, #dataForm textarea, #dataForm select, #dataForm button').forEach(function(el) { el.disabled = true; el.style.opacity = '0.5'; });
+    switchTab('tabDashboard', document.querySelector('[data-tab="tabDashboard"]'));
+  }
+  setTimeout(function() { loadNotifBadge(); }, 500);
+}
+
+// ========== NAVIGATION ==========
+function switchTab(tabId, btn) {
+  document.querySelectorAll('.tab-content').forEach(function(t) { t.classList.remove('active'); });
+  document.querySelectorAll('.nav-btn').forEach(function(b) { b.classList.remove('active'); });
+  document.querySelectorAll('.sidebar-btn[data-tab]').forEach(function(b) { b.classList.remove('active'); });
+  document.getElementById(tabId).classList.add('active');
+  document.querySelectorAll('[data-tab="'+tabId+'"]').forEach(function(b) { b.classList.add('active'); });
+  if (tabId === 'tabDashboard') loadDashboard();
+  if (tabId === 'tabDatabase') { initDbDateDefaults_(); loadRecords(1); }
+}
+
+// ========== DATABASE DATE DEFAULTS (10 hari) ==========
+function initDbDateDefaults_() {
+  var s = document.getElementById('db_filter_date_start');
+  var e = document.getElementById('db_filter_date_end');
+  if (!s.value && !e.value) {
+    var today = new Date();
+    var start = new Date(); start.setDate(today.getDate() - DB_DEFAULT_DAYS);
+    s.value = start.toISOString().split('T')[0];
+    e.value = today.toISOString().split('T')[0];
+  }
+}
+
+// ========== INPUT FORM ==========
+function selectShift(s, skipLoad) {
+  document.querySelectorAll('#shiftToggle .shift-btn').forEach(function(b) { b.classList.toggle('active', parseInt(b.dataset.shift) === s); });
+  if (!skipLoad) loadLastShiftData(s);
+}
+
+var _prevFM = null;
+var FM_ALL = ['fm_softener_lt3','fm_flotation','fm_mg16','fm_pam','fm_pam_shift','fm_sm1','fm_sm2','fm_sm3','fm_sm4','fm_sm5','fm_sm6','fm_leaching'];
+var FM_LABELS = {'fm_softener_lt3':'Softener lt.3','fm_flotation':'Flotation','fm_mg16':'MG 16','fm_pam':'PAM Awal','fm_pam_shift':'PAM/shift','fm_sm1':'Sm 1','fm_sm2':'Sm 2','fm_sm3':'Sm 3','fm_sm4':'Sm 4','fm_sm5':'Sm 5','fm_sm6':'Sm 6','fm_leaching':'FM Leaching'};
+
+function loadLastShiftData(shift) {
+  var tanggal = document.getElementById('f_tanggal').value; if (!tanggal) return;
+  _prevFM = null;
+  google.script.run.withSuccessHandler(function(res) {
+    if (!res || !res.success || !res.data) return;
+    var d = res.data;
+    if (d.clr_bak_sirkulasi) document.getElementById('f_clr_bak_sirkulasi_before').value = d.clr_bak_sirkulasi;
+    if (d.clr_sungai) document.getElementById('f_clr_sungai_before').value = d.clr_sungai;
+    if (d.clr_mg17_18) document.getElementById('f_clr_mg17_18_before').value = d.clr_mg17_18;
+    ['bak_sirkulasi','sungai','mg17_18'].forEach(function(n) { calcDiff(n); });
+    _prevFM = {};
+    FM_ALL.forEach(function(key) { _prevFM[key] = parseFloat(d[key]) || 0; });
+  }).withFailureHandler(function(){}).getLastShiftData(tanggal, shift);
+}
+
+function getSelectedShift() { var a = document.querySelector('#shiftToggle .shift-btn.active'); return a ? parseInt(a.dataset.shift) : 1; }
+
+function calcDiff(name) {
+  var before = parseFloat(document.getElementById('f_clr_' + name + '_before').value) || 0;
+  var after = parseFloat(document.getElementById('f_clr_' + name + '_after').value) || 0;
+  var diff = Math.round((after - before) * 100) / 100;
+  var el = document.getElementById('diff_' + name);
+  el.textContent = diff; el.style.color = diff < 0 ? '#F87171' : '#4ADE80';
+}
+
+function collectFormData() {
+  return {
+    tanggal: document.getElementById('f_tanggal').value, shift: getSelectedShift(),
+    nama_operator: document.getElementById('f_nama').value, user_id: currentUser.user_id,
+    chk_mg17_18: document.getElementById('f_chk_mg17_18').checked, chk_clarifier: document.getElementById('f_chk_clarifier').checked,
+    chk_fe_removal: document.getElementById('f_chk_fe_removal').checked, chk_bak_sirkulasi_besar: document.getElementById('f_chk_bak_sirkulasi_besar').checked,
+    clr_bak_sirkulasi_before: parseFloat(document.getElementById('f_clr_bak_sirkulasi_before').value)||0, clr_bak_sirkulasi_after: parseFloat(document.getElementById('f_clr_bak_sirkulasi_after').value)||0,
+    clr_sungai_before: parseFloat(document.getElementById('f_clr_sungai_before').value)||0, clr_sungai_after: parseFloat(document.getElementById('f_clr_sungai_after').value)||0,
+    clr_mg17_18_before: parseFloat(document.getElementById('f_clr_mg17_18_before').value)||0, clr_mg17_18_after: parseFloat(document.getElementById('f_clr_mg17_18_after').value)||0,
+    fm_softener_lt3: parseFloat(document.getElementById('f_fm_softener_lt3').value)||0, fm_flotation: parseFloat(document.getElementById('f_fm_flotation').value)||0,
+    fm_mg16: parseFloat(document.getElementById('f_fm_mg16').value)||0, fm_pam: parseFloat(document.getElementById('f_fm_pam').value)||0,
+    fm_pam_shift: parseFloat(document.getElementById('f_fm_pam_shift').value)||0,
+    fm_sm1: parseFloat(document.getElementById('f_fm_sm1').value)||0, fm_sm2: parseFloat(document.getElementById('f_fm_sm2').value)||0,
+    fm_sm3: parseFloat(document.getElementById('f_fm_sm3').value)||0, fm_sm4: parseFloat(document.getElementById('f_fm_sm4').value)||0,
+    fm_sm5: parseFloat(document.getElementById('f_fm_sm5').value)||0, fm_sm6: parseFloat(document.getElementById('f_fm_sm6').value)||0,
+    fm_leaching: parseFloat(document.getElementById('f_fm_leaching').value)||0,
+    filter_press_batch: document.getElementById('f_filter_press_batch').value, bongkar_lumpur: document.getElementById('f_bongkar_lumpur').value,
+    lab_clarifier: document.getElementById('f_lab_clarifier').checked, lab_mg17_18: document.getElementById('f_lab_mg17_18').checked,
+    lab_bak_sirkulasi: document.getElementById('f_lab_bak_sirkulasi').checked, lab_demin: document.getElementById('f_lab_demin').checked, lab_pam: document.getElementById('f_lab_pam').checked,
+    lab_sm1: document.getElementById('f_lab_sm1').checked, lab_sm2: document.getElementById('f_lab_sm2').checked, lab_sm3: document.getElementById('f_lab_sm3').checked,
+    lab_sm4: document.getElementById('f_lab_sm4').checked, lab_sm5: document.getElementById('f_lab_sm5').checked, lab_sm6: document.getElementById('f_lab_sm6').checked,
+    lab_tanggal: document.getElementById('f_lab_tanggal').value || '',
+    chem_hydrofloc_kg: parseFloat(document.getElementById('f_chem_hydrofloc_kg').value)||0, chem_polymer_g: parseFloat(document.getElementById('f_chem_polymer_g').value)||0,
+    pekerjaan_tambahan: document.getElementById('f_pekerjaan_tambahan').value, catatan: document.getElementById('f_catatan').value
+  };
+}
+
+// ===== FIX #1: FM validation changed from hard-block to confirm() dialog =====
+function handleSubmit() {
+  try {
+    if (isVisitor()) { showToast('Akun Visitor hanya bisa melihat data.', 'error'); return; }
+    var data = collectFormData();
+    if (!data.tanggal) { showToast('Tanggal harus diisi!', 'error'); return; }
+
+    // FIX: Empty FM → confirm dialog instead of hard block
+    var emptyFM = [];
+    FM_ALL.forEach(function(key) {
+      var el = document.getElementById('f_' + key);
+      if (!el) return;
+      var val = el.value;
+      if (val === '' || val === null || val === undefined) emptyFM.push(FM_LABELS[key]);
+    });
+    if (emptyFM.length > 0) {
+      if (!confirm('Flow meter berikut belum diisi:\n• ' + emptyFM.join('\n• ') + '\n\nField kosong akan disimpan sebagai 0.\nLanjutkan simpan?')) {
+        return;
+      }
+    }
+
+    // FIX: FM comparison → confirm dialog instead of hard block, skip if curr is 0
+    if (_prevFM) {
+      var tooSmall = [], tooLarge = [];
+      FM_ALL.forEach(function(key) {
+        var prev = _prevFM[key] || 0;
+        if (prev === 0) return;
+        var curr = parseFloat(data[key]) || 0;
+        if (curr > 0 && curr < prev) {
+          tooSmall.push(FM_LABELS[key] + ' (' + curr + ' < prev ' + prev + ')');
+        } else if (curr > 0 && (curr - prev) > 500) {
+          tooLarge.push(FM_LABELS[key] + ' (selisih ' + Math.round(curr - prev) + ')');
+        }
+      });
+      if (tooSmall.length > 0) {
+        if (!confirm('FM lebih kecil dari shift sebelumnya:\n• ' + tooSmall.join('\n• ') + '\n\nApakah data ini benar? Lanjutkan simpan?')) {
+          return;
+        }
+      }
+      if (tooLarge.length > 0) {
+        if (!confirm('Selisih FM terlalu besar (>500):\n• ' + tooLarge.join('\n• ') + '\n\nApakah data ini benar? Lanjutkan simpan?')) {
+          return;
+        }
+      }
+    }
+
+    showLoading(true);
+    google.script.run.withSuccessHandler(function(res) {
+      showLoading(false);
+      if (res && res.success) { showToast('Data berhasil disimpan! ' + res.record_id, 'success'); ssCacheClear_(); resetForm(); }
+      else { showToast((res && res.message) || 'Gagal menyimpan.', 'error'); }
+    }).withFailureHandler(function(err) {
+      showLoading(false);
+      showToast('Gagal: ' + (err && err.message ? err.message : 'koneksi error'), 'error');
+    }).createRecord(data);
+  } catch (e) {
+    showLoading(false);
+    showToast('Error submit: ' + e.message, 'error');
+  }
+}
+
+function resetForm() {
+  ['f_clr_bak_sirkulasi_before','f_clr_bak_sirkulasi_after','f_clr_sungai_before','f_clr_sungai_after','f_clr_mg17_18_before','f_clr_mg17_18_after','f_fm_softener_lt3','f_fm_flotation','f_fm_mg16','f_fm_pam','f_fm_pam_shift','f_fm_sm1','f_fm_sm2','f_fm_sm3','f_fm_sm4','f_fm_sm5','f_fm_sm6','f_fm_leaching','f_chem_hydrofloc_kg','f_chem_polymer_g'].forEach(function(id){document.getElementById(id).value='';});
+  document.getElementById('f_filter_press_batch').value=''; document.getElementById('f_bongkar_lumpur').value='';
+  document.getElementById('f_pekerjaan_tambahan').value=''; document.getElementById('f_catatan').value='';
+  document.getElementById('f_lab_tanggal').value='';
+  ['f_chk_mg17_18','f_chk_clarifier','f_chk_fe_removal','f_chk_bak_sirkulasi_besar','f_lab_clarifier','f_lab_mg17_18','f_lab_bak_sirkulasi','f_lab_demin','f_lab_pam','f_lab_sm1','f_lab_sm2','f_lab_sm3','f_lab_sm4','f_lab_sm5','f_lab_sm6'].forEach(function(id){document.getElementById(id).checked=false;});
+  ['diff_bak_sirkulasi','diff_sungai','diff_mg17_18'].forEach(function(id){document.getElementById(id).textContent='0';document.getElementById(id).style.color='#4ADE80';});
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+// ========== SUB-FORM NAVIGATION ==========
+var activeInputForm = 'formOps';
+
+function switchInputForm(formId, btn) {
+  document.querySelectorAll('.input-subform').forEach(function(el) { el.classList.remove('active'); });
+  document.getElementById(formId).classList.add('active');
+  document.querySelectorAll('#inputFormNav .group-btn').forEach(function(b) { b.classList.remove('active'); });
+  if (btn) btn.classList.add('active');
+  activeInputForm = formId;
+  if (formId === 'formFIK') initFIKForm_();
+  if (formId === 'formSoftener') initSoftenerForm_();
+  if (formId === 'formMaintenance') initMaintenanceForm_();
+  window.scrollTo({top:0,behavior:'smooth'});
+}
+
+function handleActiveSubmit() {
+  try {
+    if (isVisitor()) { showToast('Akun Visitor hanya bisa melihat data.', 'error'); return; }
+    if (activeInputForm === 'formOps') handleSubmit();
+    else if (activeInputForm === 'formFIK') handleSubmitFIK();
+    else if (activeInputForm === 'formSoftener') handleSubmitSoftener();
+    else if (activeInputForm === 'formMaintenance') handleSubmitMaintenance();
+  } catch (e) {
+    showLoading(false);
+    showToast('Error: ' + e.message, 'error');
+  }
+}
+
+// ========== FIK PROSES CLARIFIER ==========
+var FIK_SHIFT_WAKTU = { 1: ['07','12'], 2: ['15','19'], 3: ['23','03'] };
+var FIK_FIELDS = ['rotameter','flowmeter','stroke_naoh','stroke_hidroflok','stroke_superflok','ph','visual_flokulasi','visual_air','batch_lumpur'];
+
+function initFIKForm_() {
+  var today = new Date().toISOString().split('T')[0];
+  var hour = new Date().getHours();
+  var shift = (hour>=6&&hour<14)?1:(hour>=14&&hour<22)?2:3;
+  document.getElementById('fik_tanggal').value = today;
+  document.getElementById('fik_nama').value = currentUser.nama;
+  selectFikShift(shift);
+}
+function selectFikShift(s) {
+  document.querySelectorAll('#fikShiftToggle .shift-btn').forEach(function(b){b.classList.toggle('active',parseInt(b.dataset.shift)===s);});
+  buildFIKTable_(s);
+}
+
+function buildFIKTable_(shift) {
+  var tbody = document.getElementById('fikTableBody'); if (!tbody) return;
+  var waktu = FIK_SHIFT_WAKTU[shift] || ['07','12'];
+  var h = '';
+  waktu.forEach(function(w) {
+    h += '<tr><td class="label-cell">' + w + ':00</td>';
+    FIK_FIELDS.forEach(function(f) {
+      var id = 'fik_p' + w + '_' + f;
+      if (f === 'visual_flokulasi') {
+        h += '<td><select id="'+id+'"><option value="">—</option><option>Baik</option><option>Cukup</option><option>Buruk</option></select></td>';
+      } else if (f === 'visual_air') {
+        h += '<td><select id="'+id+'"><option value="">—</option><option>Jernih</option><option>Keruh</option><option>Sangat Keruh</option></select></td>';
+      } else {
+        h += '<td><input type="'+(f==='batch_lumpur'?'text':'number')+'" id="'+id+'" inputmode="'+(f==='batch_lumpur'?'text':'decimal')+'" step="any"></td>';
+      }
+    });
+    h += '</tr>';
+  });
+  tbody.innerHTML = h;
+}
+
+function collectFIKData() {
+  var as = document.querySelector('#fikShiftToggle .shift-btn.active');
+  var shift = as ? parseInt(as.dataset.shift) : 1;
+  var data = {
+    tanggal: document.getElementById('fik_tanggal').value,
+    shift: shift,
+    nama_operator: document.getElementById('fik_nama').value,
+    user_id: currentUser.user_id,
+    prep_naoh_flake_kg: parseFloat(document.getElementById('fik_prep_naoh_flake_kg').value)||0,
+    prep_hidroflok_kg: parseFloat(document.getElementById('fik_prep_hidroflok_kg').value)||0,
+    prep_superflok_g: parseFloat(document.getElementById('fik_prep_superflok_g').value)||0,
+    prep_air_naoh_l: parseFloat(document.getElementById('fik_prep_air_naoh_l').value)||0,
+    prep_air_hidroflok_l: parseFloat(document.getElementById('fik_prep_air_hidroflok_l').value)||0,
+    prep_air_superflok_l: parseFloat(document.getElementById('fik_prep_air_superflok_l').value)||0,
+    prep_pompa_ok: document.getElementById('fik_prep_pompa_ok').checked,
+    prep_tangki_ok: document.getElementById('fik_prep_tangki_ok').checked,
+    prep_keterangan: document.getElementById('fik_prep_keterangan').value,
+    catatan: document.getElementById('fik_catatan').value
+  };
+  var waktu = FIK_SHIFT_WAKTU[shift] || ['07','12'];
+  waktu.forEach(function(w) {
+    FIK_FIELDS.forEach(function(f) {
+      var el = document.getElementById('fik_p' + w + '_' + f);
+      if (!el) return;
+      var key = 'p' + w + '_' + f;
+      if (f==='visual_flokulasi'||f==='visual_air'||f==='batch_lumpur') data[key] = el.value||'';
+      else data[key] = parseFloat(el.value)||0;
+    });
+  });
+  return data;
+}
+
+function handleSubmitFIK() {
+  try {
+    var data = collectFIKData();
+    if (!data.tanggal) { showToast('Tanggal harus diisi!','error'); return; }
+    showLoading(true);
+    google.script.run.withSuccessHandler(function(res) {
+      showLoading(false);
+      if (res&&res.success) { showToast('FIK berhasil disimpan! '+res.record_id,'success'); initFIKForm_(); }
+      else showToast((res&&res.message)||'Gagal','error');
+    }).withFailureHandler(function(err){
+      showLoading(false);
+      showToast('Gagal menyimpan FIK: '+(err&&err.message?err.message:'koneksi error'),'error');
+    }).createProsesClarifier(data);
+  } catch (e) {
+    showLoading(false);
+    showToast('Error FIK: ' + e.message, 'error');
+  }
+}
+
+// ========== PROSES SOFTENER ==========
+function initSoftenerForm_() {
+  var today = new Date().toISOString().split('T')[0];
+  var hour = new Date().getHours();
+  var shift = (hour>=6&&hour<14)?1:(hour>=14&&hour<22)?2:3;
+  document.getElementById('sft_tanggal').value = today;
+  document.getElementById('sft_nama').value = currentUser.nama;
+  document.querySelectorAll('#sftShiftToggle .shift-btn').forEach(function(b){b.classList.toggle('active',parseInt(b.dataset.shift)===shift);});
+  toggleRegen(true);
+}
+function selectSftShift(s) { document.querySelectorAll('#sftShiftToggle .shift-btn').forEach(function(b){b.classList.toggle('active',parseInt(b.dataset.shift)===s);}); }
+
+function toggleRegen(isRegen) {
+  document.getElementById('sftRegenYes').classList.toggle('active', isRegen);
+  document.getElementById('sftRegenNo').classList.toggle('active', !isRegen);
+  document.getElementById('sftGaramField').style.display = isRegen ? '' : 'none';
+  if (!isRegen) document.getElementById('sft_garam_kg').value = '';
+}
+
+function handleSubmitSoftener() {
+  try {
+    var as = document.querySelector('#sftShiftToggle .shift-btn.active');
+    var isRegen = document.getElementById('sftRegenYes').classList.contains('active');
+    var data = {
+      tanggal: document.getElementById('sft_tanggal').value,
+      shift: as ? parseInt(as.dataset.shift) : 1,
+      nama_operator: document.getElementById('sft_nama').value,
+      user_id: currentUser.user_id,
+      regenerasi: isRegen,
+      garam_kg: isRegen ? (parseFloat(document.getElementById('sft_garam_kg').value)||0) : 0,
+      catatan: document.getElementById('sft_catatan').value
+    };
+    if (!data.tanggal) { showToast('Tanggal harus diisi!','error'); return; }
+    showLoading(true);
+    google.script.run.withSuccessHandler(function(res) {
+      showLoading(false);
+      if (res&&res.success) { showToast('Softener berhasil disimpan! '+res.record_id,'success'); initSoftenerForm_(); document.getElementById('sft_garam_kg').value=''; document.getElementById('sft_catatan').value=''; }
+      else showToast((res&&res.message)||'Gagal','error');
+    }).withFailureHandler(function(err){
+      showLoading(false);
+      showToast('Gagal menyimpan Softener: '+(err&&err.message?err.message:'koneksi error'),'error');
+    }).createProsesSoftener(data);
+  } catch (e) {
+    showLoading(false);
+    showToast('Error Softener: ' + e.message, 'error');
+  }
+}
+
+// ========== MAINTENANCE ==========
+var MNT_CLR_OK = ['mnt_clr_tangki','mnt_clr_tangki_flokulan','mnt_clr_tangki_floagulan','mnt_clr_tangki_chemical','mnt_clr_pompa_clarifier','mnt_clr_keseluruhan_proses','mnt_clr_pompa_siplai_leaching','mnt_clr_filter_press_1','mnt_clr_filter_press_2','mnt_clr_kolam'];
+var MNT_CLR_GD = ['mnt_clr_fungsi_proses','mnt_clr_5r_area'];
+var MNT_SFT_OK = ['mnt_sft_tangki_air_baku','mnt_sft_tangki_sand_filter','mnt_sft_tangki_garam','mnt_sft_tangki_softener','mnt_sft_tangki_hasil','mnt_sft_valve_piping'];
+var MNT_SFT_GD = ['mnt_sft_fungsi_proses','mnt_sft_5r_area'];
+var MNT_ALL = MNT_CLR_OK.concat(MNT_CLR_GD).concat(MNT_SFT_OK).concat(MNT_SFT_GD);
+
+function initMaintenanceForm_() {
+  var today = new Date().toISOString().split('T')[0];
+  var hour = new Date().getHours();
+  var shift = (hour>=6&&hour<14)?1:(hour>=14&&hour<22)?2:3;
+  document.getElementById('mnt_tanggal').value = today;
+  document.getElementById('mnt_nama').value = currentUser.nama;
+  document.querySelectorAll('#mntShiftToggle .shift-btn').forEach(function(b){b.classList.toggle('active',parseInt(b.dataset.shift)===shift);});
+  MNT_ALL.forEach(function(id) { document.getElementById(id).checked = false; });
+  document.getElementById('mnt_catatan').value = '';
+}
+function selectMntShift(s) { document.querySelectorAll('#mntShiftToggle .shift-btn').forEach(function(b){b.classList.toggle('active',parseInt(b.dataset.shift)===s);}); }
+
+function handleSubmitMaintenance() {
+  try {
+    var as = document.querySelector('#mntShiftToggle .shift-btn.active');
+    var data = {
+      tanggal: document.getElementById('mnt_tanggal').value,
+      shift: as ? parseInt(as.dataset.shift) : 1,
+      nama_operator: document.getElementById('mnt_nama').value,
+      user_id: currentUser.user_id,
+      mnt_catatan: document.getElementById('mnt_catatan').value
+    };
+    MNT_ALL.forEach(function(id) { data[id] = document.getElementById(id).checked; });
+    if (!data.tanggal) { showToast('Tanggal harus diisi!','error'); return; }
+    showLoading(true);
+    google.script.run.withSuccessHandler(function(res) {
+      showLoading(false);
+      if (res&&res.success) { showToast('Maintenance berhasil disimpan! '+res.record_id,'success'); initMaintenanceForm_(); }
+      else showToast((res&&res.message)||'Gagal','error');
+    }).withFailureHandler(function(err){
+      showLoading(false);
+      showToast('Gagal menyimpan Maintenance: '+(err&&err.message?err.message:'koneksi error'),'error');
+    }).createMaintenance(data);
+  } catch (e) {
+    showLoading(false);
+    showToast('Error Maintenance: ' + e.message, 'error');
+  }
+}
+
+// ========== DATABASE LIST ==========
+function loadRecords(page) {
+  currentPage = page || 1;
+  var container = document.getElementById('recordsList');
+  container.innerHTML = '<div class="loading-state"><div class="spinner"></div><p>Memuat data...</p></div>';
+  var options = {
+    page: currentPage, limit: 15,
+    shift: document.getElementById('db_filter_shift').value || null,
+    startDate: document.getElementById('db_filter_date_start').value || null,
+    endDate: document.getElementById('db_filter_date_end').value || null,
+    search: document.getElementById('db_search').value || null
+  };
+  google.script.run
+    .withSuccessHandler(function(res) {
+      if (!res) { container.innerHTML = '<div class="empty-state"><span class="material-icons-round">error</span><p>Server mengembalikan null — deploy ulang versi baru lalu refresh (Ctrl+Shift+R)</p></div>'; return; }
+      if (res.success) { renderRecords(res.records, res.total, res.page, res.totalPages); }
+      else { container.innerHTML = '<div class="empty-state"><span class="material-icons-round">error</span><p>' + (res.message||'Error') + '</p></div>'; }
+    })
+    .withFailureHandler(function(e) {
+      container.innerHTML = '<div class="empty-state"><span class="material-icons-round">cloud_off</span><p>Gagal memuat: ' + (e&&e.message?escHtml(e.message):'koneksi gagal') + '</p></div>';
+    })
+    .readRecords(options);
+}
+
+function renderRecords(records, total, page, totalPages) {
+  var container = document.getElementById('recordsList');
+  if (!records || records.length === 0) { container.innerHTML = '<div class="empty-state"><span class="material-icons-round">inbox</span><p>Belum ada data</p></div>'; document.getElementById('pagination').innerHTML = ''; return; }
+  var html = '';
+  records.forEach(function(r) {
+    var chkMg=(r.chk_mg17_18===true||r.chk_mg17_18==='true'),chkCl=(r.chk_clarifier===true||r.chk_clarifier==='true'),chkFe=(r.chk_fe_removal===true||r.chk_fe_removal==='true'),chkBsb=(r.chk_bak_sirkulasi_besar===true||r.chk_bak_sirkulasi_besar==='true');
+    html += '<div class="record-card"><div class="rc-header"><span class="rc-date">' + escHtml(r.tanggal_display||r.tanggal) + '</span><span class="rc-shift s' + r.shift + '">Shift ' + r.shift + '</span></div>';
+    html += '<div class="rc-operator">' + escHtml(r.nama_operator) + '</div>';
+    html += '<div class="rc-badges"><span class="rc-badge ' + (chkMg?'on':'off') + '">MG 17-18</span><span class="rc-badge ' + (chkCl?'on':'off') + '">Clarifier</span><span class="rc-badge ' + (chkFe?'on':'off') + '">Fe Removal</span><span class="rc-badge ' + (chkBsb?'on':'off') + '">Bak Sirk. Besar</span></div>';
+    html += '<div class="rc-chem">HF: ' + (r.chem_hydrofloc_kg||0) + ' kg | Poly: ' + (r.chem_polymer_g||0) + ' g</div>';
+    html += '<div class="rc-actions"><button class="btn-view" onclick="viewRecord(\'' + r.record_id + '\')"><span class="material-icons-round" style="font-size:16px">visibility</span> Lihat</button>';
+    if (!isVisitor()) {
+      html += '<button class="btn-edit" onclick="openEditModal(\'' + r.record_id + '\')"><span class="material-icons-round" style="font-size:16px">edit</span> Edit</button>';
+      html += '<button class="btn-delete-card" onclick="openDeleteModal(\'' + r.record_id + '\',\'' + escHtml(r.tanggal_display||r.tanggal) + '\',' + r.shift + ',\'' + escHtml(r.nama_operator) + '\')"><span class="material-icons-round" style="font-size:16px">delete</span> Hapus</button>';
+    }
+    html += '</div></div>';
+  });
+  container.innerHTML = html;
+  renderPagination(page, totalPages, total);
+}
+
+function renderPagination(page, totalPages, total) {
+  var el = document.getElementById('pagination');
+  if (totalPages <= 1) { el.innerHTML = '<span class="page-info">' + total + ' record</span>'; return; }
+  var html = '<button ' + (page<=1?'disabled':'') + ' onclick="loadRecords(' + (page-1) + ')">&laquo;</button>';
+  for (var i = Math.max(1,page-2); i <= Math.min(totalPages,page+2); i++) html += '<button class="' + (i===page?'active':'') + '" onclick="loadRecords(' + i + ')">' + i + '</button>';
+  html += '<button ' + (page>=totalPages?'disabled':'') + ' onclick="loadRecords(' + (page+1) + ')">&raquo;</button><span class="page-info">' + total + ' record</span>';
+  el.innerHTML = html;
+}
+function debounceSearch() { clearTimeout(searchTimeout); searchTimeout = setTimeout(function() { loadRecords(1); }, 400); }
+function clearDbFilters() {
+  document.getElementById('db_search').value = '';
+  document.getElementById('db_filter_shift').value = '';
+  var today = new Date(); var start = new Date(); start.setDate(today.getDate() - DB_DEFAULT_DAYS);
+  document.getElementById('db_filter_date_start').value = start.toISOString().split('T')[0];
+  document.getElementById('db_filter_date_end').value = today.toISOString().split('T')[0];
+  loadRecords(1);
+}
+
+// ========== VIEW / EDIT / DELETE ==========
+function viewRecord(recordId) {
+  showLoading(true);
+  google.script.run.withSuccessHandler(function(res) { showLoading(false); if(res&&res.success){renderDetailModal(res.record);}else{showToast((res&&res.message)||'Gagal','error');} }).withFailureHandler(function(){showLoading(false);showToast('Gagal memuat detail.','error');}).readRecordById(recordId);
+}
+function renderDetailModal(r) {
+  var body=document.getElementById('detailModalBody');
+  var bl=function(v){return(v===true||v==='true')?'<span class="detail-value on">✓ Ya</span>':'<span class="detail-value off">✗ Tidak</span>';};
+  var nv=function(v){return'<span class="detail-value">'+(v||0)+'</span>';};
+  var bB=parseFloat(r.clr_bak_sirkulasi_before)||0,bA=parseFloat(r.clr_bak_sirkulasi_after)||0,sB=parseFloat(r.clr_sungai_before)||0,sA=parseFloat(r.clr_sungai_after)||0,mB=parseFloat(r.clr_mg17_18_before)||0,mA=parseFloat(r.clr_mg17_18_after)||0;
+  var h='<div class="detail-section"><div class="detail-section-title">Informasi Dasar</div><div class="detail-row"><span class="detail-label">Tanggal</span><span class="detail-value">'+escHtml(r.tanggal)+'</span></div><div class="detail-row"><span class="detail-label">Shift</span><span class="detail-value">'+r.shift+'</span></div><div class="detail-row"><span class="detail-label">Operator</span><span class="detail-value">'+escHtml(r.nama_operator)+'</span></div></div>';
+  h+='<div class="detail-section"><div class="detail-section-title">Checklist Proses</div><div class="detail-row"><span class="detail-label">MG 17-18</span>'+bl(r.chk_mg17_18)+'</div><div class="detail-row"><span class="detail-label">Clarifier</span>'+bl(r.chk_clarifier)+'</div><div class="detail-row"><span class="detail-label">Fe Removal</span>'+bl(r.chk_fe_removal)+'</div><div class="detail-row"><span class="detail-label">Bak Sirkulasi Besar</span>'+bl(r.chk_bak_sirkulasi_besar)+'</div></div>';
+  h+='<div class="detail-section"><div class="detail-section-title">Data Clarifier</div><div class="detail-row"><span class="detail-label">Bak Sirkulasi</span><span class="detail-value">'+bB+' → '+bA+' (Δ '+(bA-bB)+')</span></div><div class="detail-row"><span class="detail-label">Sungai</span><span class="detail-value">'+sB+' → '+sA+' (Δ '+(sA-sB)+')</span></div><div class="detail-row"><span class="detail-label">MG 17-18</span><span class="detail-value">'+mB+' → '+mA+' (Δ '+(mA-mB)+')</span></div></div>';
+  h+='<div class="detail-section"><div class="detail-section-title">Flow Meter</div>';
+  [['Softener lt.3','fm_softener_lt3'],['Flotation','fm_flotation'],['MG 16','fm_mg16'],['PAM','fm_pam']].forEach(function(f){h+='<div class="detail-row"><span class="detail-label">'+f[0]+'</span>'+nv(r[f[1]])+'</div>';});
+  h+='<div class="detail-row"><span class="detail-label">PAM/shift</span>'+nv(r.fm_pam_shift)+'</div>';
+  for(var i=1;i<=6;i++)h+='<div class="detail-row"><span class="detail-label">Sm '+i+'</span>'+nv(r['fm_sm'+i])+'</div>';
+  h+='<div class="detail-row"><span class="detail-label">FM Leaching</span>'+nv(r.fm_leaching)+'</div>';
+  h+='</div>';
+  h+='<div class="detail-section"><div class="detail-section-title">Chemical</div><div class="detail-row"><span class="detail-label">Hydrofloc</span><span class="detail-value">'+(r.chem_hydrofloc_kg||0)+' kg</span></div><div class="detail-row"><span class="detail-label">Polymer</span><span class="detail-value">'+(r.chem_polymer_g||0)+' g</span></div></div>';
+  h+='<div class="detail-section"><div class="detail-section-title">Pengiriman Sample Lab</div>';
+  if(r.lab_tanggal) h+='<div class="detail-row"><span class="detail-label">Tanggal Pengiriman</span><span class="detail-value">'+escHtml(r.lab_tanggal)+'</span></div>';
+  [['Clarifier','lab_clarifier'],['MG 17-18','lab_mg17_18'],['Bak Sirkulasi','lab_bak_sirkulasi'],['Demin','lab_demin'],['PAM','lab_pam'],['Sm 1','lab_sm1'],['Sm 2','lab_sm2'],['Sm 3','lab_sm3'],['Sm 4','lab_sm4'],['Sm 5','lab_sm5'],['Sm 6','lab_sm6']].forEach(function(f){h+='<div class="detail-row"><span class="detail-label">'+f[0]+'</span>'+bl(r[f[1]])+'</div>';});
+  h+='</div>';
+  if(r.pekerjaan_tambahan) h+='<div class="detail-section"><div class="detail-section-title">Pekerjaan Tambahan</div><div class="detail-text">'+escHtml(r.pekerjaan_tambahan)+'</div></div>';
+  if(r.catatan) h+='<div class="detail-section"><div class="detail-section-title">Catatan</div><div class="detail-text">'+escHtml(r.catatan)+'</div></div>';
+  body.innerHTML=h; document.getElementById('detailModal').classList.add('open');
+}
+function closeDetailModal(){document.getElementById('detailModal').classList.remove('open');}
+
+function openEditModal(recordId){editingRecordId=recordId;showLoading(true);google.script.run.withSuccessHandler(function(res){showLoading(false);if(res&&res.success){renderEditForm(res.record);document.getElementById('editError').textContent='';document.getElementById('editModal').classList.add('open');}else{showToast((res&&res.message)||'Gagal','error');}}).withFailureHandler(function(){showLoading(false);showToast('Gagal memuat data.','error');}).readRecordById(recordId);}
+
+// FIX #4: Added fm_leaching to renderEditForm
+function renderEditForm(r){var body=document.getElementById('editModalBody');var ni=function(id,l,v){return'<div class="fm-item"><label>'+l+'</label><input type="number" id="e_'+id+'" value="'+(v||'')+'" inputmode="decimal" step="any"></div>';};var ci=function(id,l,v){return'<label class="checkbox-row"><input type="checkbox" id="e_'+id+'" '+(v===true||v==='true'?'checked':'')+'><span class="checkmark"></span><span class="chk-label">'+l+'</span></label>';};
+var h='<div class="form-section"><div class="section-title">Informasi Dasar</div><div class="form-row"><div class="form-field"><label>Tanggal</label><input type="date" id="e_tanggal" value="'+(r.tanggal||'')+'"></div></div><div class="form-row"><div class="form-field"><label>Shift</label><div class="shift-toggle" id="editShiftToggle">';
+for(var s=1;s<=3;s++)h+='<button type="button" class="shift-btn'+(parseInt(r.shift)===s?' active':'')+'" data-shift="'+s+'" onclick="this.parentElement.querySelectorAll(\'.shift-btn\').forEach(function(b){b.classList.remove(\'active\')}); this.classList.add(\'active\')">Shift '+s+'</button>';
+h+='</div></div></div><div class="form-row"><div class="form-field"><label>Operator</label><input type="text" id="e_nama" value="'+escHtml(r.nama_operator||'')+'" readonly class="readonly-field"></div></div></div>';
+h+='<div class="form-section"><div class="section-title">Checklist Proses</div>'+ci('chk_mg17_18','MG 17-18',r.chk_mg17_18)+ci('chk_clarifier','Clarifier',r.chk_clarifier)+ci('chk_fe_removal','Fe Removal',r.chk_fe_removal)+ci('chk_bak_sirkulasi_besar','Bak Sirkulasi Besar',r.chk_bak_sirkulasi_besar)+'</div>';
+h+='<div class="form-section"><div class="section-title">Data Clarifier</div><div class="fm-grid">'+ni('clr_bak_sirkulasi_before','Bak Sirk. (Sebelum)',r.clr_bak_sirkulasi_before)+ni('clr_bak_sirkulasi_after','Bak Sirk. (Sesudah)',r.clr_bak_sirkulasi_after)+ni('clr_sungai_before','Sungai (Sebelum)',r.clr_sungai_before)+ni('clr_sungai_after','Sungai (Sesudah)',r.clr_sungai_after)+ni('clr_mg17_18_before','MG 17-18 (Sebelum)',r.clr_mg17_18_before)+ni('clr_mg17_18_after','MG 17-18 (Sesudah)',r.clr_mg17_18_after)+'</div></div>';
+h+='<div class="form-section"><div class="section-title">Flow Meter</div><div class="fm-grid">';
+[['fm_softener_lt3','Softener lt.3'],['fm_flotation','Flotation'],['fm_mg16','MG 16'],['fm_pam','PAM']].forEach(function(f){h+=ni(f[0],f[1],r[f[0]]);});
+h+=ni('fm_pam_shift','PAM/shift',r.fm_pam_shift);
+for(var w=1;w<=6;w++)h+=ni('fm_sm'+w,'Sm '+w,r['fm_sm'+w]);
+h+=ni('fm_leaching','FM Leaching',r.fm_leaching);
+h+='</div></div>';
+h+='<div class="form-section"><div class="section-title">Filter Press</div><div class="form-row"><div class="form-field"><label>No. Batch</label><input type="text" id="e_filter_press_batch" value="'+escHtml(r.filter_press_batch||'')+'"></div></div><div class="form-row"><div class="form-field"><label>Bongkar Lumpur</label><input type="text" id="e_bongkar_lumpur" value="'+escHtml(r.bongkar_lumpur||'')+'"></div></div></div>';
+h+='<div class="form-section"><div class="section-title">Sample Lab</div>';
+h+='<div class="form-row"><div class="form-field"><label>Tanggal Pengiriman Sample</label><input type="date" id="e_lab_tanggal" value="'+(r.lab_tanggal||'')+'"></div></div>';
+[['lab_clarifier','Clarifier'],['lab_mg17_18','MG 17-18'],['lab_bak_sirkulasi','Bak Sirkulasi'],['lab_demin','Demin'],['lab_pam','PAM'],['lab_sm1','Sm 1'],['lab_sm2','Sm 2'],['lab_sm3','Sm 3'],['lab_sm4','Sm 4'],['lab_sm5','Sm 5'],['lab_sm6','Sm 6']].forEach(function(f){h+=ci(f[0],f[1],r[f[0]]);});
+h+='</div>';
+h+='<div class="form-section"><div class="section-title">Chemical</div><div class="chem-stack"><div class="chem-row"><label>Hydrofloc</label><div class="input-with-unit"><input type="number" id="e_chem_hydrofloc_kg" value="'+(r.chem_hydrofloc_kg||'')+'" inputmode="decimal" step="any"><span class="unit-badge">kg</span></div></div><div class="chem-row"><label>Polymer</label><div class="input-with-unit"><input type="number" id="e_chem_polymer_g" value="'+(r.chem_polymer_g||'')+'" inputmode="decimal" step="any"><span class="unit-badge">g</span></div></div></div></div>';
+h+='<div class="form-section"><div class="section-title">Pekerjaan Tambahan</div><textarea id="e_pekerjaan_tambahan" rows="3">'+escHtml(r.pekerjaan_tambahan||'')+'</textarea></div>';
+h+='<div class="form-section"><div class="section-title">Catatan</div><textarea id="e_catatan" rows="3">'+escHtml(r.catatan||'')+'</textarea></div>';
+body.innerHTML=h;}
+
+// FIX #3: Added fm_leaching to collectEditFormData
+function collectEditFormData(){var as=document.querySelector('#editShiftToggle .shift-btn.active');var s=as?parseInt(as.dataset.shift):1;function ev(id){var el=document.getElementById('e_'+id);return el?(parseFloat(el.value)||0):0;}function ec(id){var el=document.getElementById('e_'+id);return el?el.checked:false;}
+return{tanggal:document.getElementById('e_tanggal').value,shift:s,nama_operator:document.getElementById('e_nama').value,user_id:currentUser.user_id,chk_mg17_18:ec('chk_mg17_18'),chk_clarifier:ec('chk_clarifier'),chk_fe_removal:ec('chk_fe_removal'),chk_bak_sirkulasi_besar:ec('chk_bak_sirkulasi_besar'),clr_bak_sirkulasi_before:ev('clr_bak_sirkulasi_before'),clr_bak_sirkulasi_after:ev('clr_bak_sirkulasi_after'),clr_sungai_before:ev('clr_sungai_before'),clr_sungai_after:ev('clr_sungai_after'),clr_mg17_18_before:ev('clr_mg17_18_before'),clr_mg17_18_after:ev('clr_mg17_18_after'),fm_softener_lt3:ev('fm_softener_lt3'),fm_flotation:ev('fm_flotation'),fm_mg16:ev('fm_mg16'),fm_pam:ev('fm_pam'),fm_pam_shift:ev('fm_pam_shift'),fm_sm1:ev('fm_sm1'),fm_sm2:ev('fm_sm2'),fm_sm3:ev('fm_sm3'),fm_sm4:ev('fm_sm4'),fm_sm5:ev('fm_sm5'),fm_sm6:ev('fm_sm6'),fm_leaching:ev('fm_leaching'),filter_press_batch:document.getElementById('e_filter_press_batch').value,bongkar_lumpur:document.getElementById('e_bongkar_lumpur').value,lab_clarifier:ec('lab_clarifier'),lab_mg17_18:ec('lab_mg17_18'),lab_bak_sirkulasi:ec('lab_bak_sirkulasi'),lab_demin:ec('lab_demin'),lab_pam:ec('lab_pam'),lab_sm1:ec('lab_sm1'),lab_sm2:ec('lab_sm2'),lab_sm3:ec('lab_sm3'),lab_sm4:ec('lab_sm4'),lab_sm5:ec('lab_sm5'),lab_sm6:ec('lab_sm6'),lab_tanggal:document.getElementById('e_lab_tanggal').value||'',chem_hydrofloc_kg:ev('chem_hydrofloc_kg'),chem_polymer_g:ev('chem_polymer_g'),pekerjaan_tambahan:document.getElementById('e_pekerjaan_tambahan').value,catatan:document.getElementById('e_catatan').value};}
+
+function handleRequestEdit(){if(!editingRecordId)return;var data=collectEditFormData();var errEl=document.getElementById('editError');errEl.textContent='';if(!data.tanggal){showToast('Tanggal harus diisi!','error');return;}var info=data.tanggal+' — Shift '+data.shift+' — '+(data.nama_operator||'');showLoading(true);google.script.run.withSuccessHandler(function(res){showLoading(false);if(res&&res.success){showToast('Request perubahan berhasil dikirim!','success');closeEditModal();}else{errEl.textContent=(res&&res.message)||'Gagal';}}).withFailureHandler(function(){showLoading(false);showToast('Gagal mengirim request.','error');}).createRequest('edit',editingRecordId,info,data,currentUser.nama,currentUser.user_id);}
+function closeEditModal(){document.getElementById('editModal').classList.remove('open');editingRecordId=null;}
+
+function openDeleteModal(recordId,date,shift,operator){deletingRecordId=recordId;deletingRecordInfo=date+' — Shift '+shift+' — '+operator;document.getElementById('deleteInfo').innerHTML='Yakin ingin mengajukan <strong>request penghapusan</strong>?<br><strong>'+escHtml(date)+' — Shift '+shift+'</strong><br>Operator: '+escHtml(operator);document.getElementById('deleteError').textContent='';document.getElementById('deleteModal').classList.add('open');}
+function handleRequestDelete(){if(!deletingRecordId)return;showLoading(true);google.script.run.withSuccessHandler(function(res){showLoading(false);if(res&&res.success){showToast('Request penghapusan berhasil dikirim!','success');closeDeleteModal();}else{document.getElementById('deleteError').textContent=(res&&res.message)||'Gagal';}}).withFailureHandler(function(){showLoading(false);showToast('Gagal mengirim request.','error');}).createRequest('delete',deletingRecordId,deletingRecordInfo,null,currentUser.nama,currentUser.user_id);}
+function closeDeleteModal(){document.getElementById('deleteModal').classList.remove('open');deletingRecordId=null;}
+
+// ========== DASHBOARD ==========
+var _dashData=null, _qualityData=null;
+function ssCache_(key,val){if(val!==undefined){try{sessionStorage.setItem('wwtp_'+key,JSON.stringify(val));}catch(e){}return val;}try{var v=sessionStorage.getItem('wwtp_'+key);return v?JSON.parse(v):null;}catch(e){return null;}}
+function ssCacheClear_(){try{var keys=[];for(var i=0;i<sessionStorage.length;i++){var k=sessionStorage.key(i);if(k.indexOf('wwtp_')===0)keys.push(k);}keys.forEach(function(k){sessionStorage.removeItem(k);});}catch(e){}}
+function switchDashSubtab(id,btn){document.querySelectorAll('.dash-subcontent').forEach(function(el){el.classList.remove('active');});document.getElementById('dash'+id.charAt(0).toUpperCase()+id.slice(1)).classList.add('active');document.querySelectorAll('.subtab-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');}
+function switchGroup(grpId,btn){document.querySelectorAll('.pres-group').forEach(function(el){el.classList.remove('active');});document.getElementById(grpId).classList.add('active');document.querySelectorAll('.group-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');}
+
+function loadDashboard(forceRefresh) {
+  var s=document.getElementById('dash_start_date'),e=document.getElementById('dash_end_date');
+  if(!s.value){var d=new Date();d.setDate(d.getDate()-30);s.value=d.toISOString().split('T')[0];}
+  if(!e.value){e.value=new Date().toISOString().split('T')[0];}
+  var opts={startDate:s.value,endDate:e.value};var cacheKey='dash_'+s.value+'_'+e.value;
+  ['grp_clr_start','grp_well_start','grp_sft_start','grp_pam_start'].forEach(function(id){if(!document.getElementById(id).value)document.getElementById(id).value=s.value;});
+  ['grp_clr_end','grp_well_end','grp_sft_end','grp_pam_end'].forEach(function(id){if(!document.getElementById(id).value)document.getElementById(id).value=e.value;});
+  ['clr_daily_start','well_daily_start','sft_daily_start','pam_daily_start'].forEach(function(id){if(!document.getElementById(id).value)document.getElementById(id).value=s.value;});
+  ['clr_daily_end','well_daily_end','sft_daily_end','pam_daily_end'].forEach(function(id){if(!document.getElementById(id).value)document.getElementById(id).value=e.value;});
+  if(!forceRefresh){var cd=ssCache_(cacheKey),cq=ssCache_('q_'+cacheKey);if(cd&&cq){_dashData=cd;_qualityData=cq;renderDashboard(cd);renderQualityCharts(cq);return;}}
+  showLoading(true);
+  google.script.run.withSuccessHandler(function(res){if(res&&res.success){_dashData=res.data;ssCache_(cacheKey,res.data);renderDashboard(res.data);}
+    google.script.run.withSuccessHandler(function(qr){showLoading(false);if(qr&&qr.success){_qualityData=qr.data;ssCache_('q_'+cacheKey,qr.data);renderQualityCharts(qr.data);}}).withFailureHandler(function(){showLoading(false);}).getQualityDataForDashboard(opts);
+  }).withFailureHandler(function(){showLoading(false);showToast('Gagal memuat dashboard.','error');}).getDashboardData(opts);
+}
+
+// ========== CHART COLORS & HELPERS ==========
+var C={accent:'#4ADE80',sky:'#38BDF8',orange:'#FB923C',success:'#4ADE80',warning:'#FACC15',purple:'#A78BFA',pink:'#F472B6',text:'#B0B9CC',grid:'rgba(255,255,255,0.08)',danger:'#F87171'};
+var VOL_TITLE='Volume (m\u00B3)',MUTU_TITLE='Mutu hasil tes';
+function baseScales(yT){return{x:{ticks:{color:C.text,font:{size:13}},grid:{color:C.grid}},y:{title:{display:!!yT,text:yT||'',color:C.text,font:{size:14,weight:'600'}},ticks:{color:C.text,font:{size:12}},grid:{color:C.grid},beginAtZero:true}};}
+var baseLegend={labels:{color:C.text,usePointStyle:true,pointStyle:'circle',boxWidth:10,boxHeight:10,padding:16,font:{size:14,family:"'IBM Plex Sans'",weight:'500'},generateLabels:function(chart){return chart.data.datasets.map(function(ds,i){var meta=chart.getDatasetMeta(i);var clr=ds.borderColor||ds.backgroundColor;if(Array.isArray(clr))clr=clr[0];return{text:ds.label||'',fillStyle:meta.hidden?'transparent':clr,strokeStyle:clr,lineWidth:meta.hidden?2:0,pointStyle:'circle',hidden:false,datasetIndex:i};});}},onClick:function(e,legendItem,legend){var idx=legendItem.datasetIndex;var meta=legend.chart.getDatasetMeta(idx);meta.hidden=meta.hidden===null?true:!meta.hidden;legend.chart.update();}};
+var valPlugin={id:'valTop',afterDatasetsDraw:function(c){var ctx=c.ctx;c.data.datasets.forEach(function(ds,di){var m=c.getDatasetMeta(di);if(m.hidden)return;m.data.forEach(function(b,i){var v=ds.data[i];if(v>0){ctx.save();ctx.fillStyle='#E2E8F0';ctx.font='bold 12px sans-serif';ctx.textAlign='center';ctx.fillText(v,b.x,b.y-5);ctx.restore();}});});}};
+function destroyChart(id){if(charts[id]){charts[id].destroy();delete charts[id];}}
+function mkLine(id,labels,ds,yT){destroyChart(id);if(!labels||!labels.length)return;charts[id]=new Chart(document.getElementById(id),{type:'line',data:{labels:labels,datasets:ds},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:baseLegend},scales:baseScales(yT||VOL_TITLE)}});}
+function mkBar(id,labels,ds,yT,legend){destroyChart(id);charts[id]=new Chart(document.getElementById(id),{type:'bar',plugins:[valPlugin],data:{labels:labels,datasets:ds},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:legend?baseLegend:{display:false}},scales:baseScales(yT||VOL_TITLE)}});}
+function mkHBar(id,labels,data,color){destroyChart(id);if(!labels.length)return;charts[id]=new Chart(document.getElementById(id),{type:'bar',data:{labels:labels,datasets:[{label:'%',data:data,backgroundColor:color,borderRadius:4}]},options:{responsive:true,maintainAspectRatio:false,indexAxis:'y',plugins:{legend:{display:false}},scales:{x:{max:100,ticks:{color:C.text},grid:{color:C.grid}},y:{ticks:{color:C.text,font:{size:12}},grid:{display:false}}}}});}
+function lineDS(l,d,c,fill){return{label:l,data:d,borderColor:c,borderWidth:2.5,tension:0.3,fill:!!fill,backgroundColor:fill||'transparent',pointRadius:3.5,pointStyle:'circle',pointBackgroundColor:c};}
+function pluck(arr,k){return arr.map(function(d){return d[k];});}
+
+// ========== RENDER DASHBOARD ==========
+function renderDashboard(data){var s=data.summary;document.getElementById('sum_total').textContent=s.totalRecords;document.getElementById('sum_today').textContent=s.todayRecords;document.getElementById('sum_hydrofloc').textContent=s.totalHydrofloc;document.getElementById('sum_polymer').textContent=s.totalPolymer;var p=data.presentasi;renderClrDaily(p.clarifierDaily);renderClrAvg(p.clarifierAvg);renderWellDaily(p.wellDaily);renderWellAvg(p.wellAvgUsage,p.wellLabels,p.wellMax);renderUsageLine('chartSftDaily',p.softenerDaily,'Softener',C.purple);renderUsageLine('chartPamDaily',p.pamDaily,'PAM',C.purple);renderPamBar(p.pamDaily);renderPamMonthly(p.pamMonthly);renderLainnya(data.lainnya,p);updateDateLabels();}
+function fmtDate(v){if(!v)return'';var d=new Date(v);return('0'+d.getDate()).slice(-2)+'/'+('0'+(d.getMonth()+1)).slice(-2)+'/'+d.getFullYear();}
+function setDtLabel(id,s,e){var el=document.getElementById(id);if(el)el.textContent=s&&e?'  '+fmtDate(s)+' \u2014 '+fmtDate(e):'';}
+var DT_MAP=[['dtClrDaily','clr_daily_start','clr_daily_end'],['dtClrAvg','grp_clr_start','grp_clr_end'],['dtMutuClr','grp_clr_start','grp_clr_end'],['dtMutuBSB','grp_clr_start','grp_clr_end'],['dtMutuBS17','grp_clr_start','grp_clr_end'],['dtWellDaily','well_daily_start','well_daily_end'],['dtWellAvg','grp_well_start','grp_well_end'],['dtMutuSumur','grp_well_start','grp_well_end'],['dtSftDaily','sft_daily_start','sft_daily_end'],['dtMutuSft','grp_sft_start','grp_sft_end'],['dtPamDaily','pam_daily_start','pam_daily_end'],['dtMutuPam','grp_pam_start','grp_pam_end'],['dtPamBar','grp_pam_start','grp_pam_end'],['dtChemical','dash_start_date','dash_end_date'],['dtChecklist','dash_start_date','dash_end_date'],['dtLab','dash_start_date','dash_end_date'],['dtShift','dash_start_date','dash_end_date']];
+function updateDateLabels(){DT_MAP.forEach(function(m){setDtLabel(m[0],document.getElementById(m[1]).value,document.getElementById(m[2]).value);});setDtLabel('dtPamMonthly','2025-09-01','2026-03-31');}
+function renderClrDaily(arr){if(!arr||!arr.length)return;mkLine('chartClrDaily',pluck(arr,'date'),[{label:'Total',data:pluck(arr,'total'),borderColor:C.warning,borderWidth:3,tension:0.3,fill:false,pointRadius:4,pointStyle:'circle'},lineDS('Bak Sirkulasi',pluck(arr,'bak_sirkulasi'),C.sky,'rgba(56,189,248,0.08)'),lineDS('Sungai',pluck(arr,'sungai'),C.accent,'rgba(74,222,128,0.08)'),lineDS('MG 17-18',pluck(arr,'mg17_18'),C.orange,'rgba(251,146,60,0.08)')]);}
+function renderClrAvg(avg){if(!avg)return;mkBar('chartClrAvg',['Clarifier','Bak Sirkulasi','Sungai','MG 17-18'],[{data:[avg.avg_total,avg.avg_bak,avg.avg_sungai,avg.avg_mg],backgroundColor:[C.warning,C.sky,C.accent,C.orange],borderRadius:4}]);}
+function renderWellDaily(arr){if(!arr||!arr.length)return;var colors=[C.accent,C.sky,C.warning,C.orange,C.purple,C.pink],ds=[];for(var i=1;i<=6;i++)ds.push(lineDS('Sm '+i,pluck(arr,'sm'+i),colors[i-1]));mkLine('chartWellDaily',pluck(arr,'date'),ds);}
+function renderWellAvg(avg,labels,max){if(!avg||!avg.length)return;mkBar('chartWellAvg',labels,[{label:'Kapasitas Max',data:max,backgroundColor:C.danger+'80',borderRadius:3,pointStyle:'circle'},{label:'Rata-rata',data:avg,backgroundColor:C.accent,borderRadius:3,pointStyle:'circle'}],VOL_TITLE,true);}
+function renderUsageLine(id,arr,label,color){if(!arr||!arr.length)return;mkLine(id,pluck(arr,'date'),[{label:label,data:pluck(arr,'usage'),borderColor:color,borderWidth:3,tension:0.3,fill:true,backgroundColor:'rgba(167,139,250,0.1)',pointRadius:4,pointStyle:'circle',pointBackgroundColor:color}]);}
+function renderPamBar(arr){if(!arr||!arr.length)return;mkBar('chartPamBar',pluck(arr,'date'),[{data:pluck(arr,'usage'),backgroundColor:C.purple,borderRadius:3}]);}
+function renderPamMonthly(arr){if(!arr||!arr.length)return;mkBar('chartPamMonthly',pluck(arr,'month'),[{data:pluck(arr,'usage'),backgroundColor:C.accent,borderRadius:4}]);}
+function renderQualityCharts(qd){if(!qd)return;renderMutuBar('chartMutuClr',qd.clarifier,['ph','conductivity','tss','tds'],['pH','Cond','TSS','TDS'],[C.accent,C.sky,C.warning,C.purple]);renderMutuBar('chartMutuBSB',qd.bsb,['ph','conductivity','tss','tds'],['pH','Cond','TSS','TDS'],[C.accent,C.sky,C.warning,C.purple]);renderMutuBar('chartMutuBS17',qd.bs17,['ph','conductivity','tss','tds'],['pH','Cond','TSS','TDS'],[C.accent,C.sky,C.warning,C.purple]);renderMutuBar('chartMutuPam',qd.pam,['ph','conductivity','hardness'],['pH','Cond','Hardness'],[C.accent,C.sky,C.success]);renderMutuBar('chartMutuSft',qd.softener,['ph','conductivity','hardness'],['pH','Cond','Hardness'],[C.accent,C.sky,C.success]);
+if(qd.sumur){destroyChart('chartMutuSumur');var sL=[],pH=[],coA=[],haA=[],coC=[],hw=[];for(var i=1;i<=6;i++){var sm=qd.sumur['sm'+i];sL.push('Sm '+i);pH.push(sm?(sm.ph||0):0);var cv=sm?(sm.conductivity||0):0;coA.push(cv);if(cv>0&&cv>1000){coC.push(C.danger);hw.push('Sumur '+i);}else{coC.push(C.sky);}haA.push(sm?(sm.hardness||0):0);}charts.chartMutuSumur=new Chart(document.getElementById('chartMutuSumur'),{type:'bar',plugins:[valPlugin],data:{labels:sL,datasets:[{label:'pH',data:pH,backgroundColor:C.accent,borderRadius:3,pointStyle:'circle'},{label:'Cond',data:coA,backgroundColor:coC,borderRadius:3,pointStyle:'circle'},{label:'Hardness',data:haA,backgroundColor:C.success,borderRadius:3,pointStyle:'circle'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:baseLegend},scales:baseScales(MUTU_TITLE)}});var nEl=document.getElementById('sumurCondNote');if(nEl){if(hw.length>0){nEl.innerHTML='<strong>\u26A0 Note:</strong> Conductivity '+hw.join(', ')+' di atas 1000 \u00B5S/cm';nEl.style.display='block';}else{nEl.style.display='none';}}}}
+function renderMutuBar(id,data,keys,labels,colors){destroyChart(id);if(!data)return;mkBar(id,labels,[{data:keys.map(function(k){return data[k]||0;}),backgroundColor:colors,borderRadius:4}],MUTU_TITLE);}
+
+// ========== RELOAD ==========
+function filterByRange(arr,sId,eId){var s=document.getElementById(sId).value,e=document.getElementById(eId).value;if(!s||!e)return arr;return arr.filter(function(d){return d.date_full>=s&&d.date_full<=e;});}
+function grpOpts_(pfx){return{startDate:document.getElementById('grp_'+pfx+'_start').value,endDate:document.getElementById('grp_'+pfx+'_end').value};}
+function reloadQuality_(opts,cb){google.script.run.withSuccessHandler(function(qr){if(qr&&qr.success){if(cb)cb(qr.data);else{_qualityData=qr.data;renderQualityCharts(qr.data);}}}).getQualityDataForDashboard(opts);}
+function reloadGroupClarifier(){if(!_dashData)return;var f=filterByRange(_dashData.presentasi.clarifierDaily,'grp_clr_start','grp_clr_end');var n=f.length||1,tT=0,tB=0,tS=0,tM=0;f.forEach(function(d){tT+=d.total;tB+=d.bak_sirkulasi;tS+=d.sungai;tM+=d.mg17_18;});renderClrAvg({avg_total:Math.round(tT/n*100)/100,avg_bak:Math.round(tB/n*100)/100,avg_sungai:Math.round(tS/n*100)/100,avg_mg:Math.round(tM/n*100)/100});reloadQuality_(grpOpts_('clr'));updateDateLabels();}
+function reloadGroupWell(){if(!_dashData)return;var f=filterByRange(_dashData.presentasi.wellDaily,'grp_well_start','grp_well_end');var wK=['sm1','sm2','sm3','sm4','sm5','sm6'],wS={},wC={};wK.forEach(function(k){wS[k]=0;wC[k]=0;});f.forEach(function(d){wK.forEach(function(k){if(d[k]>0){wS[k]+=d[k];wC[k]++;}});});renderWellAvg(wK.map(function(k){return wC[k]>0?Math.round(wS[k]/wC[k]*100)/100:0;}),_dashData.presentasi.wellLabels,_dashData.presentasi.wellMax);reloadQuality_(grpOpts_('well'));updateDateLabels();}
+function reloadGroupSoftener(){if(!_dashData)return;reloadQuality_(grpOpts_('sft'),function(d){renderMutuBar('chartMutuSft',d.softener,['ph','conductivity','hardness'],['pH','Cond','Hardness'],[C.accent,C.sky,C.success]);});updateDateLabels();}
+function reloadGroupPam(){if(!_dashData)return;renderPamBar(filterByRange(_dashData.presentasi.pamDaily,'grp_pam_start','grp_pam_end'));reloadQuality_(grpOpts_('pam'),function(d){renderMutuBar('chartMutuPam',d.pam,['ph','conductivity','hardness'],['pH','Cond','Hardness'],[C.accent,C.sky,C.success]);});updateDateLabels();}
+function reloadClrDaily(){if(!_dashData)return;renderClrDaily(filterByRange(_dashData.presentasi.clarifierDaily,'clr_daily_start','clr_daily_end'));updateDateLabels();}
+function reloadWellDaily(){if(!_dashData)return;renderWellDaily(filterByRange(_dashData.presentasi.wellDaily,'well_daily_start','well_daily_end'));updateDateLabels();}
+function reloadSftDaily(){if(!_dashData)return;renderUsageLine('chartSftDaily',filterByRange(_dashData.presentasi.softenerDaily,'sft_daily_start','sft_daily_end'),'Softener',C.purple);updateDateLabels();}
+function reloadPamDaily(){if(!_dashData)return;renderUsageLine('chartPamDaily',filterByRange(_dashData.presentasi.pamDaily,'pam_daily_start','pam_daily_end'),'PAM',C.purple);updateDateLabels();}
+function renderLainnya(lainnya){var ct=lainnya.chemicalTrend;if(ct.length>0)mkLine('chartChemical',pluck(ct,'date'),[lineDS('Hydrofloc (kg)',pluck(ct,'hydrofloc'),C.sky),lineDS('Polymer (g)',pluck(ct,'polymer'),C.warning)]);var chk=lainnya.checklist.process;if(chk.labels.length>0)mkHBar('chartChecklist',chk.labels,chk.values,C.success);var lab=lainnya.checklist.lab;if(lab.labels.length>0)mkHBar('chartLab',lab.labels,lab.values,C.accent);var sa=lainnya.shiftActivity;if(sa.length>0){destroyChart('chartShift');charts.chartShift=new Chart(document.getElementById('chartShift'),{type:'bar',data:{labels:pluck(sa,'date'),datasets:[{label:'Shift 1',data:pluck(sa,'shift1'),backgroundColor:C.accent,borderRadius:3,pointStyle:'circle'},{label:'Shift 2',data:pluck(sa,'shift2'),backgroundColor:C.warning,borderRadius:3,pointStyle:'circle'},{label:'Shift 3',data:pluck(sa,'shift3'),backgroundColor:C.success,borderRadius:3,pointStyle:'circle'}]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:baseLegend},scales:{x:{stacked:true,ticks:{color:C.text},grid:{color:C.grid}},y:{stacked:true,ticks:{color:C.text,stepSize:1},grid:{color:C.grid}}}}});}}
+
+// ========== REQUEST / NOTIF / REPORT ==========
+function openRequestModal(){document.getElementById('requestModal').classList.add('open');document.getElementById('requestModalBody').innerHTML='<div class="loading-state"><div class="spinner"></div><p>Memuat...</p></div>';google.script.run.withSuccessHandler(function(res){if(res&&res.success)renderRequests(res.requests,res.isApprover);else document.getElementById('requestModalBody').innerHTML='<div class="empty-state">Gagal memuat.</div>';}).withFailureHandler(function(){document.getElementById('requestModalBody').innerHTML='<div class="empty-state">Gagal memuat.</div>';}).getRequests(currentUser.user_id);}
+function closeRequestModal(){document.getElementById('requestModal').classList.remove('open');}
+function renderRequests(requests,isApprover){var body=document.getElementById('requestModalBody');if(!requests||!requests.length){body.innerHTML='<div class="empty-state">Belum ada request.</div>';return;}var h='';if(isApprover)h+='<div class="req-role-badge">Anda adalah Approver</div>';requests.forEach(function(r){var sc=r.status==='pending'?'req-pending':(r.status==='approved'?'req-approved':'req-rejected');var sl=r.status==='pending'?'Menunggu':(r.status==='approved'?'Disetujui':'Ditolak');h+='<div class="req-card"><div class="req-card-header"><span class="req-type"><span class="material-icons-round" style="font-size:16px;">'+(r.type==='edit'?'edit':'delete')+'</span> '+(r.type==='edit'?'Ubah':'Hapus')+' Data</span><span class="req-status '+sc+'">'+sl+'</span></div><div class="req-card-body"><div class="req-info-row"><span class="req-label">ID</span><span class="req-val">'+escHtml(r.request_id)+'</span></div><div class="req-info-row"><span class="req-label">Record</span><span class="req-val">'+escHtml(r.record_info)+'</span></div><div class="req-info-row"><span class="req-label">Pengaju</span><span class="req-val">'+escHtml(r.requester_name)+'</span></div><div class="req-info-row"><span class="req-label">Waktu</span><span class="req-val">'+(r.timestamp?new Date(r.timestamp).toLocaleString('id-ID'):'-')+'</span></div>';if(r.status!=='pending'){h+='<div class="req-info-row"><span class="req-label">Oleh</span><span class="req-val">'+escHtml(r.approver)+'</span></div>';if(r.reason)h+='<div class="req-info-row"><span class="req-label">Alasan</span><span class="req-val">'+escHtml(r.reason)+'</span></div>';}h+='</div>';if(isApprover&&r.status==='pending')h+='<div class="req-card-actions"><button class="btn-req-approve" onclick="resolveReq(\''+escHtml(r.request_id)+'\',\'approved\')"><span class="material-icons-round" style="font-size:16px;">check_circle</span> Approve</button><button class="btn-req-reject" onclick="resolveReq(\''+escHtml(r.request_id)+'\',\'rejected\')"><span class="material-icons-round" style="font-size:16px;">cancel</span> Reject</button></div>';h+='</div>';});body.innerHTML=h;}
+function resolveReq(requestId,action){var reason='';if(action==='rejected')reason=prompt('Alasan penolakan (opsional):')||'';showLoading(true);google.script.run.withSuccessHandler(function(res){showLoading(false);if(res&&res.success){ssCacheClear_();showToast(res.message,'success');openRequestModal();}else showToast((res&&res.message)||'Gagal','error');}).withFailureHandler(function(){showLoading(false);showToast('Gagal.','error');}).resolveRequest(requestId,action,currentUser.user_id,currentUser.nama,reason);}
+function loadNotifBadge(){if(!currentUser)return;google.script.run.withSuccessHandler(function(res){if(!res||!res.success)return;var c=res.unreadCount||0;var b1=document.getElementById('notifBadgeMobile'),b2=document.getElementById('notifBadgeSidebar');if(b1)b1.textContent=c>0?c:'';if(b2)b2.textContent=c>0?c:'';}).withFailureHandler(function(){}).getNotifications(currentUser.user_id);}
+function openNotifModal(){document.getElementById('notifModal').classList.add('open');document.getElementById('notifModalBody').innerHTML='<div class="loading-state"><div class="spinner"></div><p>Memuat...</p></div>';google.script.run.withSuccessHandler(function(res){if(res&&res.success)renderNotifs(res.notifications,res.isApprover);else document.getElementById('notifModalBody').innerHTML='<div class="empty-state">Gagal.</div>';}).withFailureHandler(function(){document.getElementById('notifModalBody').innerHTML='<div class="empty-state">Gagal.</div>';}).getNotifications(currentUser.user_id);}
+function closeNotifModal(){document.getElementById('notifModal').classList.remove('open');loadNotifBadge();}
+function renderNotifs(notifs,isApprover){var body=document.getElementById('notifModalBody');if(!notifs||!notifs.length){body.innerHTML='<div class="empty-state">Tidak ada notifikasi.</div>';return;}var h='';if(isApprover)h+='<div class="req-role-badge">\u26A0 Anomali — Anda adalah Approver</div>';notifs.forEach(function(n){var iu=n.status==='unread';h+='<div class="req-card'+(iu?' notif-unread':'')+'"><div class="req-card-header"><span class="req-type"><span class="material-icons-round" style="font-size:16px;">trending_down</span> Selisih Negatif</span><span class="req-status '+(iu?'req-pending':'req-approved')+'">'+(iu?'Belum Ditinjau':'Resolved')+'</span></div><div class="req-card-body"><div class="req-info-row"><span class="req-label">Tanggal/Shift</span><span class="req-val">'+escHtml(n.tanggal)+' — Shift '+n.shift+'</span></div><div class="req-info-row"><span class="req-label">Operator</span><span class="req-val">'+escHtml(n.operator_name)+'</span></div><div class="req-info-row"><span class="req-label">Field</span><span class="req-val" style="color:var(--danger);font-weight:700;">'+escHtml(n.field)+'</span></div><div class="req-info-row"><span class="req-label">Before → After</span><span class="req-val">'+n.before_val+' → '+n.after_val+' ('+n.diff+')</span></div>';if(n.notes)h+='<div class="req-info-row"><span class="req-label">Catatan</span><span class="req-val">'+escHtml(n.notes)+'</span></div>';h+='</div>';if(isApprover&&iu)h+='<div class="req-card-actions"><button class="btn-req-approve" onclick="resolveNotif(\''+escHtml(n.notif_id)+'\')"><span class="material-icons-round" style="font-size:16px;">check_circle</span> Tandai Resolved</button></div>';h+='</div>';});body.innerHTML=h;}
+function resolveNotif(notifId){var notes=prompt('Catatan (opsional):')||'';showLoading(true);google.script.run.withSuccessHandler(function(res){showLoading(false);if(res&&res.success){showToast(res.message,'success');openNotifModal();}else showToast((res&&res.message)||'Gagal','error');}).withFailureHandler(function(){showLoading(false);showToast('Gagal.','error');}).resolveNotification(notifId,currentUser.nama,notes);}
+
+function openReportModal(){var d=new Date(),s=new Date();s.setDate(s.getDate()-30);document.getElementById('rpt_start').value=s.toISOString().split('T')[0];document.getElementById('rpt_end').value=d.toISOString().split('T')[0];document.getElementById('rptStatus').innerHTML='';document.getElementById('reportModal').classList.add('open');selectRptFormat(document.querySelector('#rptFormatToggle .shift-btn[data-fmt="sheet"]'));selectRptMode(document.querySelector('#rptModeToggle .shift-btn[data-mode="periode"]'));}
+function closeReportModal(){document.getElementById('reportModal').classList.remove('open');}
+function selectRptFormat(btn){document.querySelectorAll('#rptFormatToggle .shift-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');}
+function selectRptMode(btn){document.querySelectorAll('#rptModeToggle .shift-btn').forEach(function(b){b.classList.remove('active');});btn.classList.add('active');}
+function getSelectedRptFormat(){var a=document.querySelector('#rptFormatToggle .shift-btn.active');return a?a.dataset.fmt:'xlsx';}
+function getSelectedRptMode(){var a=document.querySelector('#rptModeToggle .shift-btn.active');return a?a.dataset.mode:'periode';}
+function generateReport(){
+  var s=document.getElementById('rpt_start').value,e=document.getElementById('rpt_end').value;
+  if(!s||!e){showToast('Tentukan tanggal!','error');return;}
+  var fmt=getSelectedRptFormat();var mode=getSelectedRptMode();var st=document.getElementById('rptStatus');
+  if(fmt==='sheet'){
+    var modeLabel=mode==='harian'?'Per Hari':'Per Periode';
+    st.innerHTML='<div class="loading-state"><div class="spinner"></div><p>Membuat sheet ('+modeLabel+')...</p></div>';
+    var opts={startDate:String(s),endDate:String(e),generatedBy:String(currentUser.nama),mode:String(mode)};
+    google.script.run.withSuccessHandler(function(res){if(res&&res.success){st.innerHTML='<div class="chart-note"><strong>Sheet berhasil dibuat!</strong><br>Buka spreadsheet, cari tab: <strong>'+escHtml(res.sheetName)+'</strong></div>';showToast('Sheet '+res.sheetName+' berhasil dibuat!','success');}else{st.innerHTML='<div class="chart-note chart-note-warn">'+escHtml((res&&res.message)||'Gagal')+'</div>';}}).withFailureHandler(function(err){st.innerHTML='<div class="chart-note chart-note-warn">Gagal: '+(err&&err.message?escHtml(err.message):'koneksi error')+'</div>';}).generateReport(opts);
+    return;
+  }
+  var fmtLabel=fmt==='xlsx'?'Excel':fmt==='csv'?'CSV':'PDF';var modeLabel2=mode==='harian'?'Per Hari':'Per Periode';
+  st.innerHTML='<div class="loading-state"><div class="spinner"></div><p>Membuat '+fmtLabel+' ('+modeLabel2+')...</p></div>';
+  var opts2={startDate:String(s),endDate:String(e),generatedBy:String(currentUser.nama),format:String(fmt),mode:String(mode)};
+  google.script.run.withSuccessHandler(function(res){if(res&&res.success){downloadBase64File(res.data,res.filename,res.mimeType);st.innerHTML='<div class="chart-note"><strong>Download berhasil!</strong><br>File: <strong>'+escHtml(res.filename)+'</strong></div>';showToast('File '+fmtLabel+' berhasil di-download!','success');}else{st.innerHTML='<div class="chart-note chart-note-warn">'+escHtml((res&&res.message)||'Gagal')+'</div>';}}).withFailureHandler(function(err){st.innerHTML='<div class="chart-note chart-note-warn">Gagal: '+(err&&err.message?escHtml(err.message):'koneksi error')+'</div>';}).exportReportFile(opts2);
+}
+function downloadBase64File(base64,filename,mimeType){var raw=atob(base64);var arr=new Uint8Array(raw.length);for(var i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i);var blob=new Blob([arr],{type:mimeType});var url=URL.createObjectURL(blob);var a=document.createElement('a');a.href=url;a.download=filename;document.body.appendChild(a);a.click();setTimeout(function(){document.body.removeChild(a);URL.revokeObjectURL(url);},200);}
+
+// ========== THEME ==========
+function toggleTheme(){var html=document.documentElement;var cur=html.getAttribute('data-theme')||'dark';var next=cur==='dark'?'light':'dark';html.setAttribute('data-theme',next);localStorage.setItem('wwtp_theme',next);document.getElementById('themeIcon').textContent=next==='dark'?'dark_mode':'light_mode';var sbi=document.getElementById('themeIconSidebar');if(sbi)sbi.textContent=next==='dark'?'dark_mode':'light_mode';
+if(next==='light'){C.text='#3D4654';C.grid='rgba(0,0,0,0.08)';C.accent='#16A34A';C.sky='#0284C7';C.orange='#EA580C';C.success='#16A34A';C.warning='#CA8A04';C.danger='#DC2626';C.purple='#7C3AED';C.pink='#DB2777';}else{C.text='#B0B9CC';C.grid='rgba(255,255,255,0.08)';C.accent='#4ADE80';C.sky='#38BDF8';C.orange='#FB923C';C.success='#4ADE80';C.warning='#FACC15';C.danger='#F87171';C.purple='#A78BFA';C.pink='#F472B6';}
+if(_dashData)renderDashboard(_dashData);if(_qualityData)renderQualityCharts(_qualityData);}
+(function(){var saved=localStorage.getItem('wwtp_theme')||'dark';document.documentElement.setAttribute('data-theme',saved);var icon=document.getElementById('themeIcon');if(icon)icon.textContent=saved==='dark'?'dark_mode':'light_mode';var sbi=document.getElementById('themeIconSidebar');if(sbi)sbi.textContent=saved==='dark'?'dark_mode':'light_mode';})();
+
+// ========== UTILITIES ==========
+function showToast(msg,type){var t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+(type||'');var dur=type==='error'?5000:3000;setTimeout(function(){t.className='toast';},dur);}
+function showLoading(show){document.getElementById('loadingOverlay').style.display=show?'flex':'none';}
+function escHtml(str){if(!str)return'';return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');}
+</script>
