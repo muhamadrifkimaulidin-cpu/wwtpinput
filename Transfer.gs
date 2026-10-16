@@ -97,13 +97,21 @@ function cutPasteDataKirim() {
     var resp = ui.alert('Konfirmasi', 'Pindahkan data dari kolom M ke kolom T?\n(Data sumber akan dihapus setelah dipindah)', ui.ButtonSet.YES_NO);
     if (resp !== ui.Button.YES) return;
     var mapping = [['M14:R14','T10:Y10'],['M20:R20','T11:Y11'],['M26:R26','T12:Y12'],['M32:R32','T13:Y13'],['M38:R38','T14:Y14'],['M44:R44','T15:Y15'],['M50:R50','T16:Y16']];
+    var rowHasData = function(vals) { return vals[0].some(function(v) { return v !== '' && v !== null; }); };
+    // Cek baris tujuan yang masih berisi data dan akan tertimpa
+    var conflicts = mapping.filter(function(m) {
+      return rowHasData(sheet.getRange(m[0]).getValues()) && rowHasData(sheet.getRange(m[1]).getValues());
+    }).map(function(m) { return m[1]; });
+    if (conflicts.length) {
+      var ow = ui.alert('Data tujuan masih terisi',
+        'Baris tujuan berikut masih berisi data dan akan DITIMPA:\n• ' + conflicts.join('\n• ') + '\n\nTetap timpa?', ui.ButtonSet.YES_NO);
+      if (ow !== ui.Button.YES) return;
+    }
     var moved = 0;
     for (var i = 0; i < mapping.length; i++) {
       var srcRange = sheet.getRange(mapping[i][0]);
       var srcVals = srcRange.getValues();
-      var hasData = false;
-      for (var c = 0; c < srcVals[0].length; c++) { if (srcVals[0][c] !== '' && srcVals[0][c] !== null) { hasData = true; break; } }
-      if (hasData) { sheet.getRange(mapping[i][1]).setValues(srcVals); srcRange.clearContent(); moved++; }
+      if (rowHasData(srcVals)) { sheet.getRange(mapping[i][1]).setValues(srcVals); srcRange.clearContent(); moved++; }
     }
     ui.alert('Berhasil!', moved + ' dari 7 baris berhasil dipindahkan.\n(' + (7 - moved) + ' baris kosong di-skip)', ui.ButtonSet.OK);
   } catch (e) { ui.alert('Error', 'Gagal pindah data:\n' + e.message, ui.ButtonSet.OK); }
