@@ -25,3 +25,7 @@ Backup aplikasi penginputan WWTP (Google Apps Script web app, data di Google She
 6. Deploy › Manage deployments › Edit › New version.
 
 Setelah mengubah sheet `Users` atau `Config`: **WWTP Tools › Admin › Muat Ulang Cache Users & Config**.
+
+## Menu WWTP Tools
+- **Kirim & Pindahkan Data Kualitas**: kirim DataKirim → DataQuality. Setelah tersimpan dan terverifikasi, area input DataKirim dikosongkan (format & formula tetap).
+- **Backup**: semua sheet di-backup (kecuali `RPT_`, `BACKUP_`, `tmp_`) ke spreadsheet terpisah di My Drive pemilik script. Disimpan 10 salinan terakhir per sheet (Config `backup_keep`). Link sharing dimatikan; akun lain yang masih punya akses ditampilkan di ringkasan backup.
