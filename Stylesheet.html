@@ -87,8 +87,7 @@ textarea { min-height: 84px; resize: vertical; line-height: 1.4; }
 input:focus, select:focus, textarea:focus { border-color: var(--green); box-shadow: 0 0 0 3px var(--green-soft); }
 input[readonly] { color: var(--muted); }
 input::placeholder, textarea::placeholder { color: var(--muted); opacity: .8; }
-input[type="number"]::-webkit-inner-spin-button, input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
-input[type="number"] { -moz-appearance: textfield; }
+input[inputmode="decimal"] { font-variant-numeric: tabular-nums; }
 
 /* ========== BUTTONS ========== */
 .btn-go { display: inline-flex; align-items: center; justify-content: space-between; gap: 18px; min-height: 52px; padding: 0 18px; background: var(--green); color: var(--green-ink); border-radius: var(--r); font-weight: 600; font-size: 1rem; transition: background .15s, transform .05s; }
