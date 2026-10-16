@@ -81,12 +81,17 @@
       <!-- PAGE: DATA -->
       <div id="pgData" class="page">
         <div class="hero"><h1 class="mega">DATA<span class="tick">’</span><span id="heroTotal">0</span></h1></div>
-        <div class="mod-tabs" id="dataModTabs"></div>
-        <div class="filters">
-          <div class="f-search"><span class="material-icons-round">search</span><input type="search" id="dq" placeholder="cari operator, catatan, ID…" oninput="debounceData()"></div>
-          <div class="f-range"><input type="date" id="dStart" onchange="loadData(1)" aria-label="Dari tanggal"><span>—</span><input type="date" id="dEnd" onchange="loadData(1)" aria-label="Sampai tanggal"></div>
-          <select id="dShift" onchange="loadData(1)" aria-label="Shift"><option value="">Semua shift</option><option value="1">Shift 1</option><option value="2">Shift 2</option><option value="3">Shift 3</option></select>
-          <button class="btn-line" onclick="resetDataFilters()">reset/</button>
+        <div class="sticky-stack">
+          <div class="mod-tabs" id="dataModTabs"></div>
+          <div class="filters">
+            <div class="f-search"><span class="material-icons-round">search</span><input type="search" id="dq" placeholder="cari operator, catatan, ID…" oninput="debounceData()" aria-label="Cari data"></div>
+            <button type="button" class="btn-line f-toggle" id="fToggle" onclick="toggleFilters()" aria-expanded="false" aria-controls="fMore">filter/<span class="f-count" id="fCount"></span></button>
+            <div class="f-more" id="fMore">
+              <div class="f-range"><input type="date" id="dStart" onchange="loadData(1)" aria-label="Dari tanggal"><span>—</span><input type="date" id="dEnd" onchange="loadData(1)" aria-label="Sampai tanggal"></div>
+              <select id="dShift" onchange="loadData(1)" aria-label="Shift"><option value="">Semua shift</option><option value="1">Shift 1</option><option value="2">Shift 2</option><option value="3">Shift 3</option></select>
+              <button type="button" class="btn-line" onclick="resetDataFilters()">reset/</button>
+            </div>
+          </div>
         </div>
         <div class="list-head"><span>tanggal/</span><span>operator/</span><span>ringkasan/</span><span></span></div>
         <div id="dataList" class="list"></div>
