@@ -1,26 +1,29 @@
 /**
  * ============================================
- * Report.gs v7.0 — WWTP Report (Clean Data)
- * Buat sheet baru di spreadsheet dengan data
- * lengkap, tanpa garis tepi, mudah dianalisa
+ * Report.gs v8.0 — WWTP Report (Clean Data)
+ * Sheet baru berisi data lengkap semua modul,
+ * export ke device lewat spreadsheet sementara.
  * ============================================
  */
 
-function generateReport(opts) {
+function generateReport(token, opts) {
+  return api_(token, {}, function(user) {
+    opts = opts || {};
+    return buildReport_({ startDate: opts.startDate, endDate: opts.endDate, generatedBy: user.nama, mode: opts.mode });
+  });
+}
+
+function buildReport_(opts) {
   try {
-    var startDate = opts.startDate;
-    var endDate = opts.endDate;
+    var sY = toYmd_(opts.startDate), eY = toYmd_(opts.endDate);
+    if (!sY || !eY) return { success: false, message: 'Tanggal tidak valid: ' + opts.startDate + ' — ' + opts.endDate };
+    if (sY > eY) return { success: false, message: 'Tanggal mulai harus sebelum tanggal akhir.' };
     var generatedBy = opts.generatedBy || 'Unknown';
-    var mode = opts.mode || 'periode';
+    var mode = opts.mode === 'harian' ? 'harian' : 'periode';
 
-    var ss = SpreadsheetApp.getActiveSpreadsheet(), tz = Session.getScriptTimeZone();
-    var sDate = new Date(startDate); sDate.setHours(0,0,0,0);
-    var eDate = new Date(endDate); eDate.setHours(23,59,59,999);
-
-    // Validate dates
-    if (isNaN(sDate.getTime()) || isNaN(eDate.getTime())) {
-      return { success: false, message: 'Tanggal tidak valid: ' + startDate + ' — ' + endDate };
-    }
+    var ss = SpreadsheetApp.getActiveSpreadsheet(), tz = tz_();
+    var sDate = ymdToDate_(sY, false);
+    var eDate = ymdToDate_(eY, true);
 
     var ops = collectOps_(ss, sDate, eDate, tz);
     var qual = collectQual_(ss, sDate, eDate, tz);
@@ -53,6 +56,12 @@ function generateReport(opts) {
     // ===== SECTION B: DATA KUALITAS AIR =====
     r = writeQuality_(sh, r, F, qual);
 
+    // ===== SECTION C–F: MODUL LAIN =====
+    r = writeModuleSection_(sh, r, F, ss, getModule_('fik'), sY, eY, 'C. FIK PROSES CLARIFIER');
+    r = writeModuleSection_(sh, r, F, ss, getModule_('sft'), sY, eY, 'D. PROSES SOFTENER');
+    r = writeModuleSection_(sh, r, F, ss, getModule_('mnt'), sY, eY, 'E. MAINTENANCE CHECKLIST');
+    r = writeModuleSection_(sh, r, F, ss, getModule_('pg'), sY, eY, 'F. PRESSURE GAUGE POMPA SUMUR (' + (getConfig_('pg_unit') || 'bar') + ')');
+
     // Auto-resize all columns
     for (var c = 1; c <= sh.getLastColumn(); c++) {
       try { sh.autoResizeColumn(c); } catch(e) {}
@@ -60,9 +69,47 @@ function generateReport(opts) {
 
     return { success: true, sheetName: sheetName };
   } catch (e) {
-    Logger.log('generateReport: ' + e.message + '\n' + e.stack);
+    Logger.log('buildReport_: ' + e.message + '\n' + e.stack);
     return { success: false, message: 'Gagal: ' + e.message };
   }
+}
+
+/** Dump data modul dalam rentang tanggal; kolom yang kosong semua disembunyikan. */
+function writeModuleSection_(sh, r, F, ss, mod, sY, eY, title) {
+  var sheet = ss.getSheetByName(mod.sheet);
+  if (!sheet || sheet.getLastRow() <= 1) return r;
+  var all = sheet.getDataRange().getValues();
+  var headers = all[0].map(String);
+  var rows = [];
+  for (var i = 1; i < all.length; i++) {
+    var o = rowToObj_(headers, all[i]);
+    var d = toYmd_(o.tanggal);
+    if (!d || d < sY || d > eY) continue;
+    o.tanggal = d;
+    rows.push(o);
+  }
+  if (!rows.length) return r;
+  rows.sort(function(a, b) { return a.tanggal !== b.tanggal ? (a.tanggal < b.tanggal ? -1 : 1) : (parseInt(a.shift, 10) || 0) - (parseInt(b.shift, 10) || 0); });
+
+  var always = ['tanggal', 'shift', 'nama_operator'];
+  var keys = mod.keys.filter(function(k) {
+    if (['record_id', 'timestamp', 'user_id'].indexOf(k) >= 0 || headers.indexOf(k) < 0) return false;
+    if (always.indexOf(k) >= 0) return true;
+    return rows.some(function(o) { return o[k] !== '' && o[k] !== null && o[k] !== undefined; });
+  });
+
+  r = label_(sh, r, title, F);
+  r = writeHeader_(sh, r, keys.map(function(k) { return mod.labels[k] || k; }), F);
+  r = writeRows_(sh, r, rows.map(function(o) {
+    return keys.map(function(k) {
+      var v = o[k];
+      if (k === 'tanggal') { var p = v.split('-'); return p[2] + '/' + p[1] + '/' + p[0]; }
+      if (v === true || v === 'true' || v === 'TRUE') return 'Ya';
+      if (v === false || v === 'false' || v === 'FALSE') return 'Tidak';
+      return v === null || v === undefined ? '' : v;
+    });
+  }));
+  return r + 1;
 }
 
 // ============ SECTION LABEL ============
@@ -319,62 +366,52 @@ function writeQuality_(sh, r, F, qual) {
 
 // ============ EXPORT TO DEVICE ============
 
-function exportReportFile(opts) {
-  try {
-    var startDate = opts.startDate;
-    var endDate = opts.endDate;
-    var generatedBy = opts.generatedBy || 'Unknown';
-    var format = opts.format || 'xlsx';
-    var mode = opts.mode || 'periode';
+function exportReportFile(token, opts) {
+  return api_(token, {}, function(user) {
+    opts = opts || {};
+    var format = ['xlsx', 'pdf', 'csv'].indexOf(opts.format) >= 0 ? opts.format : 'xlsx';
+    if (format === 'csv') return exportCsv_(opts.startDate, opts.endDate);
 
-    if (format === 'csv') return exportCsv_(startDate, endDate);
-
-    var result = generateReport({startDate:startDate, endDate:endDate, generatedBy:generatedBy, mode:mode});
+    var result = buildReport_({ startDate: opts.startDate, endDate: opts.endDate, generatedBy: user.nama, mode: opts.mode });
     if (!result.success) return result;
 
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var sheet = ss.getSheetByName(result.sheetName);
     if (!sheet) return { success: false, message: 'Sheet tidak ditemukan.' };
 
-    SpreadsheetApp.flush();
-    Utilities.sleep(1500);
+    // Export lewat spreadsheet sementara yang HANYA berisi sheet laporan,
+    // supaya sheet lain (Users, Config, dll.) tidak ikut ter-export.
+    var tmp = SpreadsheetApp.create('tmp_export_' + result.sheetName);
+    try {
+      var copied = sheet.copyTo(tmp);
+      copied.setName(result.sheetName);
+      tmp.getSheets().forEach(function(s) { if (s.getSheetId() !== copied.getSheetId()) tmp.deleteSheet(s); });
+      SpreadsheetApp.flush();
 
-    var gid = sheet.getSheetId();
-    var url = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export?format='
-      + (format === 'pdf' ? 'pdf' : 'xlsx') + '&gid=' + gid;
-    if (format === 'pdf') url += '&portrait=false&size=A3&gridlines=true&fzr=true&fitw=true&sheetnames=false&printtitle=false&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3';
-
-    var resp = UrlFetchApp.fetch(url, {
-      headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() },
-      muteHttpExceptions: true
-    });
-
-    if (resp.getResponseCode() !== 200) {
-      return { success: false, message: 'Export HTTP ' + resp.getResponseCode() };
+      var url = 'https://docs.google.com/spreadsheets/d/' + tmp.getId() + '/export?format=' + format;
+      if (format === 'pdf') url += '&portrait=false&size=A3&gridlines=true&fzr=true&fitw=true&sheetnames=false&printtitle=false&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3';
+      var resp = UrlFetchApp.fetch(url, {
+        headers: { 'Authorization': 'Bearer ' + ScriptApp.getOAuthToken() },
+        muteHttpExceptions: true
+      });
+      if (resp.getResponseCode() !== 200) return { success: false, message: 'Export HTTP ' + resp.getResponseCode() };
+      var b64 = Utilities.base64Encode(resp.getBlob().getBytes());
+      var ext = format === 'pdf' ? '.pdf' : '.xlsx';
+      var mime = format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      return { success: true, data: b64, filename: result.sheetName + ext, mimeType: mime };
+    } finally {
+      try { DriveApp.getFileById(tmp.getId()).setTrashed(true); } catch (e) {}
+      try { ss.deleteSheet(sheet); } catch (e) {}
     }
-
-    var b64 = Utilities.base64Encode(resp.getBlob().getBytes());
-
-    // Untuk export: hapus sheet setelah download
-    // Untuk sheet mode: biarkan sheet tetap ada
-    if (format !== 'sheet') {
-      ss.deleteSheet(sheet);
-    }
-
-    var ext = format === 'pdf' ? '.pdf' : '.xlsx';
-    var mime = format === 'pdf' ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-    return { success: true, data: b64, filename: result.sheetName + ext, mimeType: mime };
-  } catch (e) {
-    Logger.log('exportReportFile: ' + e.message + '\n' + e.stack);
-    return { success: false, message: 'Export gagal: ' + e.message };
-  }
+  });
 }
 
 function exportCsv_(startDate, endDate) {
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet(), tz = Session.getScriptTimeZone();
-    var sD = new Date(startDate); sD.setHours(0,0,0,0);
-    var eD = new Date(endDate); eD.setHours(23,59,59,999);
+    var sY = toYmd_(startDate), eY = toYmd_(endDate);
+    if (!sY || !eY) return { success: false, message: 'Tanggal tidak valid.' };
+    var sD = ymdToDate_(sY, false), eD = ymdToDate_(eY, true);
     var sheet = ss.getSheetByName('DataOps');
     if (!sheet || sheet.getLastRow() <= 1) return { success: false, message: 'Tidak ada data.' };
     var hdr = sheet.getRange(1,1,1,sheet.getLastColumn()).getValues()[0];
@@ -382,11 +419,10 @@ function exportCsv_(startDate, endDate) {
     var ci = {}; for (var h = 0; h < hdr.length; h++) ci[hdr[h]] = h;
     var rows = [hdr.join(',')];
     for (var i = 1; i < all.length; i++) {
-      var dt = all[i][ci['tanggal']];
-      if (dt instanceof Date) { if (dt < sD || dt > eD) continue; }
-      else { var ds = String(dt); if (!ds.match(/^\d{4}-\d{2}-\d{2}/)) continue; if (ds < Utilities.formatDate(sD,tz,'yyyy-MM-dd') || ds > Utilities.formatDate(eD,tz,'yyyy-MM-dd')) continue; }
-      var cells = hdr.map(function(_,j) {
-        var v = all[i][j]; if (v instanceof Date) v = Utilities.formatDate(v,tz,'yyyy-MM-dd HH:mm:ss');
+      var ds = toYmd_(all[i][ci['tanggal']]);
+      if (!ds || ds < sY || ds > eY) continue;
+      var cells = hdr.map(function(h,j) {
+        var v = all[i][j]; if (v instanceof Date) v = /tanggal$/.test(String(h)) ? toYmd_(v) : Utilities.formatDate(v,tz,'yyyy-MM-dd HH:mm:ss');
         v = String(v===null||v===undefined?'':v);
         if (v.indexOf(',')>=0||v.indexOf('\n')>=0||v.indexOf('"')>=0) v='"'+v.replace(/"/g,'""')+'"';
         return v;

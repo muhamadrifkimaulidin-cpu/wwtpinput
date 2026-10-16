@@ -1,6 +1,6 @@
 /**
  * ============================================
- * Transfer.gs — WWTP Tools v2.0
+ * Transfer.gs — WWTP Tools v2.1
  * 1. Kirim data kualitas DataKirim → DataQuality
  * 2. Cut-paste antar cell di DataKirim
  * 3. Hapus data input di DataKirim
@@ -52,7 +52,7 @@ function sendQualityData() {
     }
 
     var now = new Date();
-    var qcId = 'QC-' + Utilities.formatDate(now, tz, 'yyyyMMdd-HHmmss');
+    var qcId = genId_('QC-');
     var row = [];
     for (var h = 0; h < qHeaders.length; h++) {
       switch (qHeaders[h]) {
@@ -119,5 +119,11 @@ function onOpen() {
       .addSeparator()
       .addItem('Lihat Daftar Backup', 'listBackups')
       .addItem('Buka Spreadsheet Backup', 'openBackupSpreadsheet'))
+    .addSubMenu(ui.createMenu('Admin')
+      .addItem('Siapkan Sheet & Kolom Baru', 'prepareSheets')
+      .addItem('Amankan Password Users (hash)', 'hashUserPasswords')
+      .addItem('Muat Ulang Cache Users & Config', 'refreshCaches')
+      .addSeparator()
+      .addItem('Setup Ulang Semua Sheet (RESET)', 'setupAll'))
     .addToUi();
 }
