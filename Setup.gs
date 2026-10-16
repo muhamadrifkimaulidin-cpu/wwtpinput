@@ -142,7 +142,7 @@ function setupConfigSheet_() {
 // ============================================
 
 var BACKUP_KEEP_DEFAULT_ = 10;
-var BACKUP_SKIP_PREFIX_ = ['RPT_', 'BACKUP_', 'tmp_'];
+var BACKUP_SKIP_PREFIX_ = ['RPT_', 'BACKUP_', 'tmp_', 'BK_'];
 
 function getBackupKeep_() {
   var n = parseInt(getConfig_('backup_keep'), 10);
@@ -198,6 +198,9 @@ function runBackup_() {
   var today = fmtDate_(new Date(), 'yyyyMMdd');
   var keep = getBackupKeep_();
   var backupSS = getOrCreateBackupSS_();
+  if (backupSS.getId() === ss.getId()) {
+    throw new Error('Config backup_spreadsheet_id menunjuk ke spreadsheet utama. Kosongkan nilainya agar dibuat spreadsheet backup terpisah.');
+  }
   var others = secureBackupFile_(backupSS);
   var copied = [], failed = [];
 
@@ -239,15 +242,29 @@ function pruneBackups_(backupSS, keep) {
   return deleted;
 }
 
-/** Dipanggil trigger harian (tanpa dialog). */
+/** Dipanggil trigger harian (tanpa dialog). Kegagalan dikirim ke Config admin_email. */
 function dailyAutoBackup() {
-  runBackup_();
+  try {
+    var r = runBackup_();
+    if (r.failed.length) {
+      sendAdminEmail_('Backup harian sebagian gagal',
+        '<p>' + r.copied.length + ' sheet berhasil di-backup, <b>' + r.failed.length + ' gagal</b>:</p><ul><li>' +
+        r.failed.map(escHtml_).join('</li><li>') + '</li></ul><p>Spreadsheet backup: ' + escHtml_(r.backupSS.getName()) + '</p>');
+    }
+  } catch (e) {
+    Logger.log('dailyAutoBackup error: ' + e.message);
+    sendAdminEmail_('Backup harian GAGAL', '<p>Backup harian tidak berjalan.</p><p><b>Error:</b> ' + escHtml_(e.message) +
+      '</p><p>Jalankan WWTP Tools › Backup › Backup Sekarang untuk mencoba ulang.</p>');
+    throw e; // tetap tercatat sebagai gagal di riwayat eksekusi Apps Script
+  }
 }
 
 /** Menu: Backup Sekarang (dengan ringkasan). */
 function backupNow() {
   var ui = requireUi_();
-  var r = runBackup_();
+  var r;
+  try { r = runBackup_(); }
+  catch (e) { ui.alert('Backup gagal', e.message, ui.ButtonSet.OK); return; }
   ui.alert(r.failed.length ? 'Backup selesai dengan error' : 'Backup selesai',
     r.copied.length + ' sheet di-backup ke ' + r.backupSS.getName() + '.\n' +
     'Disimpan ' + r.keep + ' salinan terakhir per sheet; ' + r.deleted + ' salinan lama dihapus.' +
@@ -269,7 +286,7 @@ function setupDailyBackupTrigger() {
   ScriptApp.newTrigger('dailyAutoBackup').timeBased().everyDays(1).atHour(5).create();
   SpreadsheetApp.getUi().alert('Auto-Backup Aktif',
     'Backup harian berhasil diaktifkan.\n\nJadwal: Setiap hari jam 05:00 (' + tz_() + ')\nTujuan: ' + backupSS.getName() +
-    '\nSheet: semua sheet (kecuali RPT_, BACKUP_, tmp_)\nRetensi: ' + getBackupKeep_() + ' salinan terakhir per sheet\n\nURL backup:\n' + backupSS.getUrl() + accessNote_(others),
+    '\nSheet: semua sheet (kecuali RPT_, BACKUP_, tmp_, BK_)\nRetensi: ' + getBackupKeep_() + ' salinan terakhir per sheet\n\nURL backup:\n' + backupSS.getUrl() + accessNote_(others),
     SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
