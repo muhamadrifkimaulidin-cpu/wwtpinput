@@ -1,0 +1,169 @@
+/**
+ * ============================================
+ * CRUDProses.gs — CRUD Proses Clarifier & Softener
+ * Sheets: DataProsesClarifier, DataProsesSoftener
+ * FIXED: Auto-create sheets, timestamp ID
+ * ============================================
+ */
+
+// ============ SHARED HELPERS ============
+
+function getProsesSH_(sheetName) {
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getSheetByName(sheetName);
+  if (!sheet) return { sheet: null, headers: [] };
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  return { sheet: sheet, headers: headers };
+}
+
+/**
+ * FIX: Auto-create sheet with default headers if not exists
+ */
+function ensureProsesSH_(sheetName, defaultHeaders) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName(sheetName);
+  if (sheet) {
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    return { sheet: sheet, headers: headers };
+  }
+  // Auto-create
+  sheet = ss.insertSheet(sheetName);
+  sheet.getRange(1, 1, 1, defaultHeaders.length).setValues([defaultHeaders]);
+  sheet.getRange(1, 1, 1, defaultHeaders.length).setFontWeight('bold');
+  sheet.setFrozenRows(1);
+  Logger.log('Auto-created sheet: ' + sheetName + ' with ' + defaultHeaders.length + ' columns');
+  return { sheet: sheet, headers: defaultHeaders };
+}
+
+/**
+ * FIX: Timestamp+random ID instead of sequential counter
+ */
+function genProsesId_(prefix, sheet) {
+  var now = new Date();
+  var tz = Session.getScriptTimeZone();
+  return prefix + Utilities.formatDate(now, tz, 'yyyyMMddHHmmss') + '-' + Math.floor(Math.random() * 900 + 100);
+}
+
+function sanitizeProsesRow_(headers, data) {
+  var row = [];
+  for (var i = 0; i < headers.length; i++) {
+    var key = headers[i];
+    row.push(data.hasOwnProperty(key) ? data[key] : '');
+  }
+  return row;
+}
+
+function readProsesGeneric_(sheetName, options) {
+  try {
+    var info = getProsesSH_(sheetName);
+    if (!info.sheet || info.sheet.getLastRow() <= 1) return { success: true, records: [], total: 0 };
+    var allData = info.sheet.getDataRange().getValues();
+    var tz = Session.getScriptTimeZone();
+    var page = (options && options.page) || 1;
+    var limit = (options && options.limit) || 15;
+    var filterShift = options && options.shift;
+    var filterStartDate = (options && options.startDate) || '';
+    var filterEndDate = (options && options.endDate) || '';
+
+    var records = [];
+    for (var i = allData.length - 1; i >= 1; i--) {
+      var obj = {};
+      for (var j = 0; j < info.headers.length; j++) {
+        var val = allData[i][j];
+        if (val instanceof Date) {
+          obj[info.headers[j]] = (info.headers[j] === 'tanggal')
+            ? Utilities.formatDate(val, tz, 'yyyy-MM-dd')
+            : Utilities.formatDate(val, tz, 'yyyy-MM-dd HH:mm:ss');
+        } else {
+          obj[info.headers[j]] = val;
+        }
+      }
+      if (filterShift && String(obj.shift) !== String(filterShift)) continue;
+      if (filterStartDate || filterEndDate) {
+        var rd = String(obj.tanggal || '');
+        if (filterStartDate && rd < filterStartDate) continue;
+        if (filterEndDate && rd > filterEndDate) continue;
+      }
+      records.push(obj);
+    }
+
+    var total = records.length;
+    var totalPages = Math.ceil(total / limit);
+    var start = (page - 1) * limit;
+    return { success: true, records: records.slice(start, start + limit), total: total, page: page, totalPages: totalPages };
+  } catch (e) { return { success: false, message: 'Gagal memuat: ' + e.message, records: [] }; }
+}
+
+// ============ FIK / PROSES CLARIFIER ============
+
+function getFIKHeaders_() {
+  return [
+    'record_id','timestamp','tanggal','shift','nama_operator','user_id',
+    'prep_naoh_flake_kg','prep_hidroflok_kg','prep_superflok_g',
+    'prep_air_naoh_l','prep_air_hidroflok_l','prep_air_superflok_l',
+    'prep_pompa_ok','prep_tangki_ok','prep_keterangan',
+    'p07_rotameter','p07_flowmeter','p07_stroke_naoh','p07_stroke_hidroflok','p07_stroke_superflok',
+    'p07_ph','p07_visual_flokulasi','p07_visual_air','p07_batch_lumpur',
+    'p12_rotameter','p12_flowmeter','p12_stroke_naoh','p12_stroke_hidroflok','p12_stroke_superflok',
+    'p12_ph','p12_visual_flokulasi','p12_visual_air','p12_batch_lumpur',
+    'p15_rotameter','p15_flowmeter','p15_stroke_naoh','p15_stroke_hidroflok','p15_stroke_superflok',
+    'p15_ph','p15_visual_flokulasi','p15_visual_air','p15_batch_lumpur',
+    'p19_rotameter','p19_flowmeter','p19_stroke_naoh','p19_stroke_hidroflok','p19_stroke_superflok',
+    'p19_ph','p19_visual_flokulasi','p19_visual_air','p19_batch_lumpur',
+    'p23_rotameter','p23_flowmeter','p23_stroke_naoh','p23_stroke_hidroflok','p23_stroke_superflok',
+    'p23_ph','p23_visual_flokulasi','p23_visual_air','p23_batch_lumpur',
+    'p03_rotameter','p03_flowmeter','p03_stroke_naoh','p03_stroke_hidroflok','p03_stroke_superflok',
+    'p03_ph','p03_visual_flokulasi','p03_visual_air','p03_batch_lumpur',
+    'catatan'
+  ];
+}
+
+/**
+ * FIX: Uses ensureProsesSH_ to auto-create sheet if missing
+ */
+function createProsesClarifier(data) {
+  try {
+    var info = ensureProsesSH_('DataProsesClarifier', getFIKHeaders_());
+    var recordId = genProsesId_('FIK-', info.sheet);
+    data.record_id = recordId;
+    data.timestamp = new Date().toISOString();
+    info.sheet.appendRow(sanitizeProsesRow_(info.headers, data));
+    return { success: true, message: 'Data FIK berhasil disimpan.', record_id: recordId };
+  } catch (e) {
+    Logger.log('createProsesClarifier error: ' + e.message + '\n' + e.stack);
+    return { success: false, message: 'Gagal: ' + e.message };
+  }
+}
+
+function readProsesClarifier(options) {
+  return readProsesGeneric_('DataProsesClarifier', options);
+}
+
+// ============ PROSES SOFTENER ============
+
+function getSoftenerHeaders_() {
+  return [
+    'record_id','timestamp','tanggal','shift','nama_operator','user_id',
+    'regenerasi','garam_kg','catatan'
+  ];
+}
+
+/**
+ * FIX: Uses ensureProsesSH_ to auto-create sheet if missing
+ */
+function createProsesSoftener(data) {
+  try {
+    var info = ensureProsesSH_('DataProsesSoftener', getSoftenerHeaders_());
+    var recordId = genProsesId_('SFT-', info.sheet);
+    data.record_id = recordId;
+    data.timestamp = new Date().toISOString();
+    info.sheet.appendRow(sanitizeProsesRow_(info.headers, data));
+    return { success: true, message: 'Data Softener berhasil disimpan.', record_id: recordId };
+  } catch (e) {
+    Logger.log('createProsesSoftener error: ' + e.message + '\n' + e.stack);
+    return { success: false, message: 'Gagal: ' + e.message };
+  }
+}
+
+function readProsesSoftener(options) {
+  return readProsesGeneric_('DataProsesSoftener', options);
+}
