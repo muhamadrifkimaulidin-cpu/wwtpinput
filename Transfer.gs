@@ -1,11 +1,19 @@
 /**
  * ============================================
- * Transfer.gs — WWTP Tools v2.1
- * 1. Kirim data kualitas DataKirim → DataQuality
+ * Transfer.gs — WWTP Tools v2.2
+ * 1. Kirim data kualitas DataKirim → DataQuality, lalu kosongkan
+ *    area input DataKirim (pindah, bukan salin)
  * 2. Cut-paste antar cell di DataKirim
  * 3. Hapus data input di DataKirim
  * ============================================
  */
+
+// Area input DataKirim (hanya isi yang dihapus; format & formula tetap)
+var DATAKIRIM_INPUT_RANGES_ = ['G10:K12', 'G14:K15', 'G20:K26', 'M10:R49', 'T10:Y19', 'T23:Y31', 'AA10:AE18', 'AA23:AE31'];
+
+function clearDataKirimInputs_(sheet) {
+  DATAKIRIM_INPUT_RANGES_.forEach(function(a) { sheet.getRange(a).clearContent(); });
+}
 
 function sendQualityData() {
   var ui = SpreadsheetApp.getUi();
@@ -21,6 +29,8 @@ function sendQualityData() {
     if (!tanggal) { ui.alert('Error', 'Tanggal di H5 belum diisi!', ui.ButtonSet.OK); return; }
     var tz = Session.getScriptTimeZone();
     var tanggalStr = (tanggal instanceof Date) ? Utilities.formatDate(tanggal, tz, 'yyyy-MM-dd') : String(tanggal).trim();
+    var go = ui.alert('Kirim & pindahkan data?', 'Data kualitas tanggal ' + tanggalStr + ' akan dikirim ke DataQuality.\nSetelah berhasil, area input DataKirim dikosongkan (format & formula tetap).\n\nLanjutkan?', ui.ButtonSet.YES_NO);
+    if (go !== ui.Button.YES) return;
 
     var codes = kirim.getRange('C6:C41').getValues();
     var displayVals = kirim.getRange('D6:D41').getDisplayValues();
@@ -65,9 +75,17 @@ function sendQualityData() {
       }
     }
     quality.appendRow(row);
+    SpreadsheetApp.flush();
+    // Pastikan baris benar-benar tersimpan sebelum mengosongkan input
+    var colId = qHeaders.indexOf('qc_id');
+    if (colId >= 0 && String(quality.getRange(quality.getLastRow(), colId + 1).getValue()) !== qcId) {
+      ui.alert('Error', 'Data terkirim tidak terverifikasi. Input DataKirim TIDAK dikosongkan.', ui.ButtonSet.OK);
+      return;
+    }
+    clearDataKirimInputs_(kirim);
     var filled = 0;
     for (var key in dataMap) { if (dataMap[key] !== '' && dataMap[key] !== 0) filled++; }
-    ui.alert('Berhasil!', 'Data kualitas tanggal ' + tanggalStr + ' berhasil dikirim.\nID: ' + qcId + '\nField terisi: ' + filled + ' dari ' + Object.keys(dataMap).length, ui.ButtonSet.OK);
+    ui.alert('Berhasil!', 'Data kualitas tanggal ' + tanggalStr + ' berhasil dipindahkan ke DataQuality.\nID: ' + qcId + '\nField terisi: ' + filled + ' dari ' + Object.keys(dataMap).length + '\n\nArea input DataKirim sudah dikosongkan.', ui.ButtonSet.OK);
   } catch (e) { ui.alert('Error', 'Gagal kirim data:\n' + e.message, ui.ButtonSet.OK); Logger.log('sendQualityData error: ' + e.message + '\n' + e.stack); }
 }
 
@@ -98,22 +116,21 @@ function clearDataKirim() {
     if (!sheet) { ui.alert('Error', 'Sheet DataKirim tidak ditemukan!', ui.ButtonSet.OK); return; }
     var resp = ui.alert('Konfirmasi', 'Hapus semua data input di DataKirim?\n(Hanya isi cell yang dihapus, format & formula tetap aman)', ui.ButtonSet.YES_NO);
     if (resp !== ui.Button.YES) return;
-    var ranges = ['G10:K12','G14:K15','G20:K26','M10:R49','T10:Y19','T23:Y31','AA10:AE18','AA23:AE31'];
-    for (var i = 0; i < ranges.length; i++) sheet.getRange(ranges[i]).clearContent();
-    ui.alert('Berhasil!', '8 area data berhasil dihapus.', ui.ButtonSet.OK);
+    clearDataKirimInputs_(sheet);
+    ui.alert('Berhasil!', DATAKIRIM_INPUT_RANGES_.length + ' area data berhasil dihapus.', ui.ButtonSet.OK);
   } catch (e) { ui.alert('Error', 'Gagal hapus data:\n' + e.message, ui.ButtonSet.OK); }
 }
 
 function onOpen() {
   var ui = SpreadsheetApp.getUi();
   ui.createMenu('WWTP Tools')
-    .addItem('Kirim Data Kualitas', 'sendQualityData')
+    .addItem('Kirim & Pindahkan Data Kualitas', 'sendQualityData')
     .addItem('Pindahkan Data (Cut-Paste)', 'cutPasteDataKirim')
     .addSeparator()
     .addItem('Hapus Data Input', 'clearDataKirim')
     .addSeparator()
     .addSubMenu(ui.createMenu('Backup')
-      .addItem('Backup Sekarang', 'dailyAutoBackup')
+      .addItem('Backup Sekarang', 'backupNow')
       .addItem('Aktifkan Auto-Backup Harian', 'setupDailyBackupTrigger')
       .addItem('Nonaktifkan Auto-Backup', 'removeDailyBackupTrigger')
       .addSeparator()

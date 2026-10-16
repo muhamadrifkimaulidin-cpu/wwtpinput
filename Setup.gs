@@ -14,7 +14,8 @@ var DEFAULT_CONFIG_ = [
   ['records_per_page', '15'],
   ['admin_email', ''],
   ['approver_ids', 'USR005,USR006,USR003'],
-  ['pg_unit', 'bar']
+  ['pg_unit', 'bar'],
+  ['backup_keep', '10']
 ];
 
 /**
@@ -134,94 +135,141 @@ function setupConfigSheet_() {
 }
 
 // ============================================
-// AUTO-BACKUP HARIAN (ke Spreadsheet terpisah)
+// AUTO-BACKUP (ke Spreadsheet terpisah, hanya admin)
+// - Semua sheet di-backup, kecuali sheet sementara (RPT_, BACKUP_, tmp_)
+// - Per sheet disimpan N salinan terakhir (Config 'backup_keep', default 10)
+// - Backup di hari yang sama menimpa salinan hari itu
 // ============================================
+
+var BACKUP_KEEP_DEFAULT_ = 10;
+var BACKUP_SKIP_PREFIX_ = ['RPT_', 'BACKUP_', 'tmp_'];
+
+function getBackupKeep_() {
+  var n = parseInt(getConfig_('backup_keep'), 10);
+  return n > 0 ? n : BACKUP_KEEP_DEFAULT_;
+}
 
 function getOrCreateBackupSS_() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var config = ss.getSheetByName('Config');
-  if (config && config.getLastRow() > 1) {
-    var data = config.getDataRange().getValues();
-    for (var i = 0; i < data.length; i++) {
-      if (data[i][0] === 'backup_spreadsheet_id') {
-        var savedId = String(data[i][1]).trim();
-        if (savedId) {
-          try { var existing = SpreadsheetApp.openById(savedId); return existing; } catch (e) {}
-        }
-      }
-    }
+  var savedId = String(getConfig_('backup_spreadsheet_id') || '').trim();
+  if (savedId) {
+    try { return SpreadsheetApp.openById(savedId); } catch (e) {}
   }
-  var file = DriveApp.getFileById(ss.getId());
-  var folders = file.getParents();
-  var folder = folders.hasNext() ? folders.next() : DriveApp.getRootFolder();
+  // Dibuat di My Drive pemilik script (bukan di folder bersama), jadi tidak
+  // mewarisi akses operator dari folder.
   var backupSS = SpreadsheetApp.create('WWTP_Backup_' + ss.getName());
-  var backupFile = DriveApp.getFileById(backupSS.getId());
-  folder.addFile(backupFile);
-  var root = DriveApp.getRootFolder();
-  root.removeFile(backupFile);
   var defaultSheet = backupSS.getSheetByName('Sheet1');
-  if (config) {
-    var found = false;
-    if (config.getLastRow() > 1) {
-      var configData = config.getDataRange().getValues();
-      for (var j = 0; j < configData.length; j++) {
-        if (configData[j][0] === 'backup_spreadsheet_id') { config.getRange(j + 1, 2).setValue(backupSS.getId()); found = true; break; }
-      }
-    }
-    if (!found) config.appendRow(['backup_spreadsheet_id', backupSS.getId()]);
+  var cfg = ensureSheet_('Config', ['key', 'value']).sheet;
+  var data = cfg.getDataRange().getValues(), found = false;
+  for (var j = 0; j < data.length; j++) {
+    if (data[j][0] === 'backup_spreadsheet_id') { cfg.getRange(j + 1, 2).setValue(backupSS.getId()); found = true; break; }
   }
+  if (!found) cfg.appendRow(['backup_spreadsheet_id', backupSS.getId()]);
+  invalidateConfig_();
   var infoSheet = backupSS.insertSheet('_INFO');
   infoSheet.getRange('A1:B1').setValues([['Key', 'Value']]).setFontWeight('bold');
-  infoSheet.getRange('A2:B4').setValues([['Source', ss.getName()],['Source ID', ss.getId()],['Created', new Date().toISOString()]]);
+  infoSheet.getRange('A2:B4').setValues([['Source', ss.getName()], ['Source ID', ss.getId()], ['Created', new Date().toISOString()]]);
   if (defaultSheet) { try { backupSS.deleteSheet(defaultSheet); } catch (e) {} }
   return backupSS;
 }
 
-function dailyAutoBackup() {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var tz = Session.getScriptTimeZone();
-  var today = Utilities.formatDate(new Date(), tz, 'yyyyMMdd');
-  var sheetsToBackup = ['DataOps', 'DataQuality', 'Requests', 'Notifications', 'DataProsesClarifier', 'DataProsesSoftener', 'DataMaintenance', 'DataPressureGauge'];
-  var backupSS = getOrCreateBackupSS_();
-  var count = 0;
-  sheetsToBackup.forEach(function(name) {
-    var src = ss.getSheetByName(name);
-    if (!src || src.getLastRow() <= 1) return;
-    var bkName = 'BK_' + name + '_' + today;
-    if (backupSS.getSheetByName(bkName)) return;
-    var copied = src.copyTo(backupSS);
-    copied.setName(bkName);
-    count++;
-  });
-  cleanOldBackups_(backupSS, 30);
-  Logger.log('Daily backup: ' + count + ' sheets → ' + backupSS.getName() + ' (' + today + ')');
+/** Matikan link sharing & kembalikan daftar akun selain pemilik yang masih punya akses. */
+function secureBackupFile_(backupSS) {
+  var others = [];
+  try {
+    var file = DriveApp.getFileById(backupSS.getId());
+    try { file.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE); } catch (e) {}
+    var owner = file.getOwner() ? file.getOwner().getEmail() : '';
+    file.getEditors().concat(file.getViewers()).forEach(function(u) {
+      var em = u.getEmail();
+      if (em && em !== owner && others.indexOf(em) < 0) others.push(em);
+    });
+  } catch (e) { Logger.log('secureBackupFile_: ' + e.message); }
+  return others;
 }
 
-function cleanOldBackups_(backupSS, maxDays) {
-  var now = new Date();
-  var sheets = backupSS.getSheets();
-  for (var i = sheets.length - 1; i >= 0; i--) {
-    var name = sheets[i].getName();
-    if (name.indexOf('BK_') !== 0) continue;
-    var dateStr = name.substring(name.length - 8);
-    if (!dateStr.match(/^\d{8}$/)) continue;
-    var y = parseInt(dateStr.substring(0, 4)), m = parseInt(dateStr.substring(4, 6)) - 1, d = parseInt(dateStr.substring(6, 8));
-    var bkDate = new Date(y, m, d);
-    var diffDays = Math.floor((now - bkDate) / (1000 * 60 * 60 * 24));
-    if (diffDays > maxDays) {
-      if (backupSS.getSheets().length > 1) { backupSS.deleteSheet(sheets[i]); Logger.log('Deleted old backup: ' + name); }
+function isBackupSource_(name) {
+  return !BACKUP_SKIP_PREFIX_.some(function(p) { return name.indexOf(p) === 0; });
+}
+
+/** Inti backup. Return ringkasan { copied, failed, deleted, keep, backupSS, others }. */
+function runBackup_() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var today = fmtDate_(new Date(), 'yyyyMMdd');
+  var keep = getBackupKeep_();
+  var backupSS = getOrCreateBackupSS_();
+  var others = secureBackupFile_(backupSS);
+  var copied = [], failed = [];
+
+  ss.getSheets().forEach(function(src) {
+    var name = src.getName();
+    if (!isBackupSource_(name)) return;
+    var bkName = 'BK_' + name + '_' + today;
+    try {
+      var copy = src.copyTo(backupSS);
+      var old = backupSS.getSheetByName(bkName);
+      if (old) backupSS.deleteSheet(old); // timpa salinan hari ini setelah salinan baru berhasil
+      copy.setName(bkName);
+      copied.push(name);
+    } catch (e) {
+      failed.push(name + ' (' + e.message + ')');
     }
-  }
+  });
+
+  var deleted = pruneBackups_(backupSS, keep);
+  Logger.log('Backup: ' + copied.length + ' sheet, gagal ' + failed.length + ', dihapus ' + deleted + ' → ' + backupSS.getName());
+  return { copied: copied, failed: failed, deleted: deleted, keep: keep, backupSS: backupSS, others: others };
+}
+
+/** Per sheet sumber, simpan `keep` salinan terbaru; hapus sisanya. */
+function pruneBackups_(backupSS, keep) {
+  var groups = {};
+  backupSS.getSheets().forEach(function(sh) {
+    var m = sh.getName().match(/^BK_(.+)_(\d{8})$/);
+    if (!m) return;
+    (groups[m[1]] = groups[m[1]] || []).push({ sheet: sh, date: m[2] });
+  });
+  var deleted = 0;
+  Object.keys(groups).forEach(function(k) {
+    var list = groups[k].sort(function(a, b) { return a.date < b.date ? 1 : -1; });
+    list.slice(keep).forEach(function(x) {
+      if (backupSS.getSheets().length > 1) { backupSS.deleteSheet(x.sheet); deleted++; }
+    });
+  });
+  return deleted;
+}
+
+/** Dipanggil trigger harian (tanpa dialog). */
+function dailyAutoBackup() {
+  runBackup_();
+}
+
+/** Menu: Backup Sekarang (dengan ringkasan). */
+function backupNow() {
+  var ui = requireUi_();
+  var r = runBackup_();
+  ui.alert(r.failed.length ? 'Backup selesai dengan error' : 'Backup selesai',
+    r.copied.length + ' sheet di-backup ke ' + r.backupSS.getName() + '.\n' +
+    'Disimpan ' + r.keep + ' salinan terakhir per sheet; ' + r.deleted + ' salinan lama dihapus.' +
+    (r.failed.length ? '\n\nGagal:\n' + r.failed.join('\n') : '') + accessNote_(r.others),
+    ui.ButtonSet.OK);
+}
+
+function accessNote_(others) {
+  return others.length
+    ? '\n\n⚠ Akun lain yang masih punya akses ke spreadsheet backup:\n' + others.join('\n') + '\nHapus lewat tombol Share bila bukan admin.'
+    : '\n\nAkses: hanya pemilik (link sharing nonaktif).';
 }
 
 function setupDailyBackupTrigger() {
   requireUi_();
   removeBackupTriggers_();
   var backupSS = getOrCreateBackupSS_();
+  var others = secureBackupFile_(backupSS);
   ScriptApp.newTrigger('dailyAutoBackup').timeBased().everyDays(1).atHour(5).create();
   SpreadsheetApp.getUi().alert('Auto-Backup Aktif',
-    'Backup harian berhasil diaktifkan.\n\nJadwal: Setiap hari jam 05:00 WIB\nTujuan: ' + backupSS.getName() +
-    '\nSheet: DataOps, DataQuality, Requests, Notifications, FIK, Softener, Maintenance, Pressure Gauge\nRetensi: 30 hari\n\nURL backup:\n' + backupSS.getUrl(),
+    'Backup harian berhasil diaktifkan.\n\nJadwal: Setiap hari jam 05:00 (' + tz_() + ')\nTujuan: ' + backupSS.getName() +
+    '\nSheet: semua sheet (kecuali RPT_, BACKUP_, tmp_)\nRetensi: ' + getBackupKeep_() + ' salinan terakhir per sheet\n\nURL backup:\n' + backupSS.getUrl() + accessNote_(others),
     SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
@@ -248,8 +296,9 @@ function listBackups() {
       var name = sheets[i].getName();
       if (name.indexOf('BK_') === 0) backups.push(name + ' (' + sheets[i].getLastRow() + ' rows)');
     }
+    backups.sort();
     SpreadsheetApp.getUi().alert('Daftar Backup (' + backups.length + ')',
-      'Lokasi: ' + backupSS.getName() + '\n\n' + (backups.length === 0 ? 'Belum ada backup.' : backups.join('\n')),
+      'Lokasi: ' + backupSS.getName() + '\nRetensi: ' + getBackupKeep_() + ' salinan per sheet\n\n' + (backups.length === 0 ? 'Belum ada backup.' : backups.join('\n')) + accessNote_(secureBackupFile_(backupSS)),
       SpreadsheetApp.getUi().ButtonSet.OK);
   } catch (e) { SpreadsheetApp.getUi().alert('Error', e.message, SpreadsheetApp.getUi().ButtonSet.OK); }
 }
