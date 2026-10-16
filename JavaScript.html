@@ -551,11 +551,24 @@ function resetDataFilters() {
   $('dEnd').value = S.info.today; $('dStart').value = addDays(S.info.today, -10);
   loadData(1);
 }
+function toggleFilters(force) {
+  var m = $('fMore'), open = typeof force === 'boolean' ? force : !m.classList.contains('open');
+  m.classList.toggle('open', open);
+  $('fToggle').setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+/** Jumlah filter yang berbeda dari default (10 hari terakhir, semua shift) — tampil di tombol filter/ */
+function updateFilterCount() {
+  var n = 0;
+  if ($('dShift').value) n++;
+  if ($('dEnd').value !== S.info.today || $('dStart').value !== addDays(S.info.today, -10)) n++;
+  var c = $('fCount'); c.textContent = n || ''; c.classList.toggle('on', n > 0);
+}
 function debounceData() { clearTimeout(S.searchTimer); S.searchTimer = setTimeout(function() { loadData(1); }, 400); }
 function switchDataMod(k) { S.dataMod = k; renderModTabs('dataModTabs', k, 'switchDataMod'); loadData(1); window.scrollTo(0, 0); }
 
 function loadData(page) {
   S.dataPage = page || 1;
+  updateFilterCount();
   $('dataList').innerHTML = '<div class="loading-row"><div class="spin dark"></div></div>';
   var opts = { page: S.dataPage, limit: 15, shift: $('dShift').value || '', startDate: $('dStart').value || '', endDate: $('dEnd').value || '', search: $('dq').value || '' };
   var mod = S.dataMod;
