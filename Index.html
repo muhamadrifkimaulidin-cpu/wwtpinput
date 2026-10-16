@@ -2,323 +2,164 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>WWTP Operations</title>
+  <script>(function(){var t;try{t=localStorage.getItem('wwtp_theme');}catch(e){}if(t!=='light'&&t!=='dark')t=(window.matchMedia&&matchMedia('(prefers-color-scheme: dark)').matches)?'dark':'light';document.documentElement.setAttribute('data-theme',t);})();</script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700;800;900&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Round" rel="stylesheet">
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
   <?!= include('Stylesheet') ?>
 </head>
 <body>
 
-  <!-- LOGIN -->
-  <div id="loginScreen" class="screen active">
-    <div class="login-container">
-      <div class="login-logo">
-        <span class="material-icons-round logo-icon">water_drop</span>
-        <h1>WWTP OPS</h1>
-        <p class="login-subtitle">Wastewater Treatment Operations</p>
-      </div>
-      <div class="login-form">
-        <div class="input-group"><span class="material-icons-round input-icon">person</span><input type="text" id="loginName" placeholder="Nama Operator" autocomplete="off"></div>
-        <div class="input-group"><span class="material-icons-round input-icon">lock</span><input type="password" id="loginPassword" placeholder="Password" onkeydown="if(event.key==='Enter')handleLogin()"></div>
-        <button id="btnLogin" class="btn-primary btn-full" onclick="handleLogin()"><span class="material-icons-round">login</span> Masuk</button>
-        <p id="loginError" class="error-text"></p>
-      </div>
-    </div>
+  <!-- TOP BAR -->
+  <div class="topbar">
+    <span class="tb-path" id="tbPath">wwtp-ops/</span>
+    <span class="tb-clock" id="tbClock">-- : -- : --</span>
+    <span class="tb-meta" id="tbMeta"></span>
   </div>
 
+  <!-- LOGIN -->
+  <section id="loginScreen" class="screen active">
+    <div class="login-hero">
+      <h1 class="mega">WWTP<span class="tick">’</span>OPS</h1>
+    </div>
+    <div class="login-grid">
+      <div class="login-info">
+        <p class="mono-row"><span id="loginDate"></span><span>in-shift &amp; on-site</span></p>
+        <p class="lead">Pencatatan operasional pengolahan air limbah — per shift, langsung ke database.</p>
+      </div>
+      <form class="login-panel" onsubmit="handleLogin(); return false;">
+        <label class="slug" for="loginName">nama-operator/</label>
+        <input type="text" id="loginName" autocomplete="username" autocapitalize="words" required>
+        <label class="slug" for="loginPassword">password/</label>
+        <input type="password" id="loginPassword" autocomplete="current-password" required>
+        <button type="submit" class="btn-go" id="btnLogin"><span>Masuk</span><span class="arr">↗</span></button>
+        <p id="loginError" class="err"></p>
+        <button type="button" class="btn-line btn-theme" onclick="toggleTheme()"><span class="material-icons-round theme-ic">dark_mode</span> tema/<span class="theme-lbl"></span></button>
+      </form>
+    </div>
+  </section>
+
   <!-- MAIN APP -->
-  <div id="mainApp" class="screen">
-    <aside class="sidebar" id="sidebar">
-      <div class="sidebar-logo"><span class="material-icons-round sidebar-logo-icon">water_drop</span><span class="sidebar-logo-text">WWTP OPS</span></div>
-      <div class="sidebar-nav">
-        <div class="sidebar-label">MENU</div>
-        <button class="sidebar-btn active" data-tab="tabInput" onclick="switchTab('tabInput', this)"><span class="material-icons-round">edit_note</span><span>Data Entry</span></button>
-        <button class="sidebar-btn" data-tab="tabDashboard" onclick="switchTab('tabDashboard', this)"><span class="material-icons-round">dashboard</span><span>Dashboard</span></button>
-        <button class="sidebar-btn" data-tab="tabDatabase" onclick="switchTab('tabDatabase', this)"><span class="material-icons-round">storage</span><span>Database</span></button>
-        <button class="sidebar-btn" onclick="openRequestModal()"><span class="material-icons-round">notifications</span><span>Riwayat Request</span></button>
-        <button class="sidebar-btn" onclick="openNotifModal()"><span class="material-icons-round">warning</span><span>Notifikasi Anomali</span><span class="notif-badge-sidebar" id="notifBadgeSidebar"></span></button>
-        <button class="sidebar-btn" onclick="openReportModal()"><span class="material-icons-round">print</span><span>Cetak Laporan</span></button>
-      </div>
-      <div class="sidebar-footer">
-        <button class="sidebar-btn" onclick="toggleTheme()"><span class="material-icons-round" id="themeIconSidebar">dark_mode</span><span>Ganti Tema</span></button>
-        <div class="sidebar-user">
-          <div class="sidebar-user-avatar"><span class="material-icons-round">person</span></div>
-          <div class="sidebar-user-info"><span class="sidebar-user-name" id="sidebarUserName"></span><span class="sidebar-user-role">Operator</span></div>
-          <button class="btn-icon" onclick="handleLogout()" title="Logout"><span class="material-icons-round">logout</span></button>
+  <section id="mainApp" class="screen">
+    <header class="nav">
+      <div class="nav-logo">wwtp<span class="tick">’</span>ops</div>
+      <nav class="nav-tabs">
+        <button class="nav-tab needs-write" data-page="pgInput" onclick="goPage('pgInput')">Input</button>
+        <button class="nav-tab" data-page="pgData" onclick="goPage('pgData')">Data</button>
+        <button class="nav-tab" data-page="pgRequest" onclick="goPage('pgRequest')">Request<span class="badge" data-badge="req"></span></button>
+        <button class="nav-tab" data-page="pgAnomali" onclick="goPage('pgAnomali')">Anomali<span class="badge" data-badge="ntf"></span></button>
+        <button class="nav-tab" data-page="pgReport" onclick="goPage('pgReport')">Laporan</button>
+      </nav>
+      <button class="nav-cell" onclick="toggleTheme()" title="Ganti tema" aria-label="Ganti tema"><span class="material-icons-round theme-ic">dark_mode</span></button>
+      <div class="nav-user"><span id="navUser"></span><small id="navRole"></small></div>
+      <button class="nav-cta" onclick="handleLogout()"><span>Keluar</span><span class="arr">↗</span></button>
+    </header>
+
+    <main class="app">
+
+      <!-- PAGE: INPUT -->
+      <div id="pgInput" class="page">
+        <div class="hero">
+          <h1 class="mega">INPUT<span class="tick">’</span><span id="heroShift">S1</span></h1>
         </div>
-      </div>
-    </aside>
-
-    <div class="main-wrapper">
-      <header class="app-header">
-        <div class="header-left"><span class="material-icons-round header-icon">water_drop</span><span class="header-title">WWTP OPS</span></div>
-        <div class="header-right"><span id="headerUserName" class="header-user"></span><button class="btn-icon" onclick="openReportModal()" title="Cetak Laporan"><span class="material-icons-round">print</span></button><button class="btn-icon" onclick="openNotifModal()" title="Notifikasi" style="position:relative;"><span class="material-icons-round">warning</span><span class="notif-badge" id="notifBadgeMobile"></span></button><button class="btn-icon" onclick="openRequestModal()" title="Riwayat Request"><span class="material-icons-round">notifications</span></button><button class="btn-icon" onclick="toggleTheme()" title="Tema"><span class="material-icons-round" id="themeIcon">dark_mode</span></button><button class="btn-icon" onclick="handleLogout()" title="Logout"><span class="material-icons-round">logout</span></button></div>
-      </header>
-
-    <main class="app-content">
-
-      <!-- TAB 1: INPUT -->
-      <div id="tabInput" class="tab-content active">
-        <div class="page-header"><h2><span class="material-icons-round">edit_note</span> Data Entry</h2><button type="button" class="btn-submit-top" id="btnSubmitTop" onclick="handleActiveSubmit()"><span class="material-icons-round">save</span> Simpan</button></div>
-        <div class="group-nav" id="inputFormNav">
-          <button class="group-btn active" onclick="switchInputForm('formOps',this)"><span class="material-icons-round">edit_note</span> Operasional</button>
-          <button class="group-btn" onclick="switchInputForm('formFIK',this)"><span class="material-icons-round">water_drop</span> FIK Clarifier</button>
-          <button class="group-btn" onclick="switchInputForm('formSoftener',this)"><span class="material-icons-round">filter_alt</span> Softener</button>
-          <button class="group-btn" onclick="switchInputForm('formMaintenance',this)"><span class="material-icons-round">build</span> Maintenance</button>
+        <div class="hero-info">
+          <div class="hi-left mono-row"><span id="hiDate"></span><span id="hiTz"></span></div>
+          <div class="hi-right"><p>Catat kondisi proses tiap shift. Pilih modul, cek tanggal &amp; shift, lalu simpan.</p></div>
         </div>
-
-        <!-- SUB-FORM 1: DATA OPERASIONAL (existing) -->
-        <div id="formOps" class="input-subform active">
-        <form id="dataForm" onsubmit="return false;">
-          <div class="form-section">
-            <div class="section-title"><span class="material-icons-round">info</span> Informasi Dasar</div>
-            <div class="form-row"><div class="form-field"><label>Tanggal</label><input type="date" id="f_tanggal" required></div></div>
-            <div class="form-row"><div class="form-field"><label>Shift</label><div class="shift-toggle" id="shiftToggle"><button type="button" class="shift-btn" data-shift="1" onclick="selectShift(1)">Shift 1</button><button type="button" class="shift-btn" data-shift="2" onclick="selectShift(2)">Shift 2</button><button type="button" class="shift-btn" data-shift="3" onclick="selectShift(3)">Shift 3</button></div></div></div>
-            <div class="form-row"><div class="form-field"><label>Nama Operator</label><input type="text" id="f_nama" readonly class="readonly-field"></div></div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">checklist</span> Checklist Data Proses</div>
-            <label class="checkbox-row"><input type="checkbox" id="f_chk_mg17_18"><span class="checkmark"></span><span class="chk-label">Proses MG 17 - 18</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="f_chk_clarifier"><span class="checkmark"></span><span class="chk-label">Clarifier</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="f_chk_fe_removal"><span class="checkmark"></span><span class="chk-label">Fe Removal</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="f_chk_bak_sirkulasi_besar"><span class="checkmark"></span><span class="chk-label">Bak Sirkulasi Besar</span></label>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">speed</span> Data Clarifier</div>
-            <div class="table-responsive"><table class="data-table"><thead><tr><th>Lokasi</th><th>Sebelum</th><th>Sesudah</th><th>Selisih</th></tr></thead><tbody>
-              <tr><td class="label-cell">Bak Sirkulasi</td><td><input type="number" id="f_clr_bak_sirkulasi_before" inputmode="decimal" step="any" oninput="calcDiff('bak_sirkulasi')"></td><td><input type="number" id="f_clr_bak_sirkulasi_after" inputmode="decimal" step="any" oninput="calcDiff('bak_sirkulasi')"></td><td><span class="diff-value" id="diff_bak_sirkulasi">0</span></td></tr>
-              <tr><td class="label-cell">Sungai</td><td><input type="number" id="f_clr_sungai_before" inputmode="decimal" step="any" oninput="calcDiff('sungai')"></td><td><input type="number" id="f_clr_sungai_after" inputmode="decimal" step="any" oninput="calcDiff('sungai')"></td><td><span class="diff-value" id="diff_sungai">0</span></td></tr>
-              <tr><td class="label-cell">MG 17 - 18</td><td><input type="number" id="f_clr_mg17_18_before" inputmode="decimal" step="any" oninput="calcDiff('mg17_18')"></td><td><input type="number" id="f_clr_mg17_18_after" inputmode="decimal" step="any" oninput="calcDiff('mg17_18')"></td><td><span class="diff-value" id="diff_mg17_18">0</span></td></tr>
-            </tbody></table></div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">gas_meter</span> Data Flow Meter</div>
-            <div class="fm-grid">
-              <div class="fm-item"><label>Softener lt.3</label><input type="number" id="f_fm_softener_lt3" inputmode="decimal" step="any"></div>
-              <div class="fm-item"><label>Flotation</label><input type="number" id="f_fm_flotation" inputmode="decimal" step="any"></div>
-              <div class="fm-item"><label>MG 16</label><input type="number" id="f_fm_mg16" inputmode="decimal" step="any"></div>
-              <div class="fm-item"><label>PAM Awal</label><input type="number" id="f_fm_pam" inputmode="decimal" step="any"></div>
-              <div class="fm-item"><label>PAM akhir</label><input type="number" id="f_fm_pam_shift" inputmode="decimal" step="any"></div>
-              <div class="fm-item"><label>Sm 1</label><input type="number" id="f_fm_sm1" inputmode="decimal" step="any"></div>
-              <div class="fm-item"><label>Sm 2</label><input type="number" id="f_fm_sm2" inputmode="decimal" step="any"></div>
-              <div class="fm-item"><label>Sm 3</label><input type="number" id="f_fm_sm3" inputmode="decimal" step="any"></div>
-              <div class="fm-item"><label>Sm 4</label><input type="number" id="f_fm_sm4" inputmode="decimal" step="any"></div>
-              <div class="fm-item"><label>Sm 5</label><input type="number" id="f_fm_sm5" inputmode="decimal" step="any"></div>
-              <div class="fm-item"><label>Sm 6</label><input type="number" id="f_fm_sm6" inputmode="decimal" step="any"></div>
-            </div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">filter_alt</span> Filter Press</div>
-            <div class="form-row"><div class="form-field"><label>Nomor Batch Filter Press</label><input type="text" id="f_filter_press_batch" placeholder="Contoh: FP-001, FP-002"></div></div>
-            <div class="form-row"><div class="form-field"><label>Bongkar Lumpur</label><input type="text" id="f_bongkar_lumpur" placeholder="Keterangan bongkar lumpur"></div></div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">science</span> Pengiriman Sample ke Lab</div>
-            <div class="form-row"><div class="form-field"><label>Tanggal Pengiriman Sample</label><input type="date" id="f_lab_tanggal"></div></div>
-            <div class="checkbox-grid">
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_clarifier"><span class="checkmark"></span><span class="chk-label">Clarifier</span></label>
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_mg17_18"><span class="checkmark"></span><span class="chk-label">MG 17 - 18</span></label>
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_bak_sirkulasi"><span class="checkmark"></span><span class="chk-label">Bak Sirkulasi</span></label>
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_demin"><span class="checkmark"></span><span class="chk-label">Softener</span></label>
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_pam"><span class="checkmark"></span><span class="chk-label">PAM</span></label>
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_sm1"><span class="checkmark"></span><span class="chk-label">Sm 1</span></label>
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_sm2"><span class="checkmark"></span><span class="chk-label">Sm 2</span></label>
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_sm3"><span class="checkmark"></span><span class="chk-label">Sm 3</span></label>
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_sm4"><span class="checkmark"></span><span class="chk-label">Sm 4</span></label>
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_sm5"><span class="checkmark"></span><span class="chk-label">Sm 5</span></label>
-              <label class="checkbox-row"><input type="checkbox" id="f_lab_sm6"><span class="checkmark"></span><span class="chk-label">Sm 6</span></label>
-            </div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">biotech</span> Penggunaan Chemical</div>
-            <div class="chem-stack">
-              <div class="chem-row"><label>Hydrofloc</label><div class="input-with-unit"><input type="number" id="f_chem_hydrofloc_kg" inputmode="decimal" step="any" placeholder="0"><span class="unit-badge">kg</span></div></div>
-              <div class="chem-row"><label>Polymer</label><div class="input-with-unit"><input type="number" id="f_chem_polymer_g" inputmode="decimal" step="any" placeholder="0"><span class="unit-badge">g</span></div></div>
-            </div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">gas_meter</span> Flow Meter Leaching</div>
-            <div class="chem-row"><label>FM Leaching</label><div class="input-with-unit"><input type="number" id="f_fm_leaching" inputmode="decimal" step="any" placeholder="0"><span class="unit-badge">m³</span></div></div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">construction</span> Pekerjaan Tambahan</div><textarea id="f_pekerjaan_tambahan" rows="3" placeholder="Tuliskan pekerjaan tambahan di luar rutin..."></textarea></div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">sticky_note_2</span> Catatan</div><textarea id="f_catatan" rows="3" placeholder="Tuliskan catatan tambahan..."></textarea></div>
-        </form>
-        </div>
-
-        <!-- SUB-FORM 2: FIK PROSES CLARIFIER -->
-        <div id="formFIK" class="input-subform">
-        <form id="fikForm" onsubmit="return false;">
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">info</span> Informasi Dasar</div>
-            <div class="form-row"><div class="form-field"><label>Tanggal</label><input type="date" id="fik_tanggal" required></div></div>
-            <div class="form-row"><div class="form-field"><label>Shift</label><div class="shift-toggle" id="fikShiftToggle"><button type="button" class="shift-btn" data-shift="1" onclick="selectFikShift(1)">Shift 1</button><button type="button" class="shift-btn" data-shift="2" onclick="selectFikShift(2)">Shift 2</button><button type="button" class="shift-btn" data-shift="3" onclick="selectFikShift(3)">Shift 3</button></div></div></div>
-            <div class="form-row"><div class="form-field"><label>Nama Operator</label><input type="text" id="fik_nama" readonly class="readonly-field"></div></div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">science</span> Persiapan Proses</div>
-            <div class="fm-grid">
-              <div class="fm-item"><label>NaOH Flake</label><div class="input-with-unit"><input type="number" id="fik_prep_naoh_flake_kg" inputmode="decimal" step="any" placeholder="50"><span class="unit-badge">kg</span></div></div>
-              <div class="fm-item"><label>Hidroflok</label><div class="input-with-unit"><input type="number" id="fik_prep_hidroflok_kg" inputmode="decimal" step="any" placeholder="50"><span class="unit-badge">kg</span></div></div>
-              <div class="fm-item"><label>Superflok</label><div class="input-with-unit"><input type="number" id="fik_prep_superflok_g" inputmode="decimal" step="any" placeholder="250"><span class="unit-badge">g</span></div></div>
-              <div class="fm-item"><label>Air NaOH</label><div class="input-with-unit"><input type="number" id="fik_prep_air_naoh_l" inputmode="decimal" step="any" placeholder="450"><span class="unit-badge">L</span></div></div>
-              <div class="fm-item"><label>Air Hidroflok</label><div class="input-with-unit"><input type="number" id="fik_prep_air_hidroflok_l" inputmode="decimal" step="any" placeholder="450"><span class="unit-badge">L</span></div></div>
-              <div class="fm-item"><label>Air Superflok</label><div class="input-with-unit"><input type="number" id="fik_prep_air_superflok_l" inputmode="decimal" step="any" placeholder="500"><span class="unit-badge">L</span></div></div>
-            </div>
-            <label class="checkbox-row"><input type="checkbox" id="fik_prep_pompa_ok"><span class="checkmark"></span><span class="chk-label">Kondisi Pompa (Supply/Transfer) Berfungsi</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="fik_prep_tangki_ok"><span class="checkmark"></span><span class="chk-label">Kondisi Tangki, Pengaduk, Pipa, Valve Berfungsi</span></label>
-            <div class="form-row"><div class="form-field"><label>Keterangan Abnormal</label><textarea id="fik_prep_keterangan" rows="2" placeholder="Catat jika ada kondisi alat abnormal..."></textarea></div></div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">schedule</span> Data Proses (6 Waktu)</div>
-            <div class="table-responsive"><table class="data-table fik-table"><thead><tr><th>Jam</th><th>Rotameter</th><th>Flowmeter</th><th>Str. NaOH</th><th>Str. HF</th><th>Str. SF</th><th>pH</th><th>Visual Flok</th><th>Visual Air</th><th>Batch</th></tr></thead><tbody id="fikTableBody"></tbody></table></div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">sticky_note_2</span> Catatan</div><textarea id="fik_catatan" rows="3" placeholder="Keterangan / catatan..."></textarea></div>
-        </form>
-        </div>
-
-        <!-- SUB-FORM 3: PROSES SOFTENER -->
-        <div id="formSoftener" class="input-subform">
-        <form id="softenerForm" onsubmit="return false;">
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">info</span> Informasi Dasar</div>
-            <div class="form-row"><div class="form-field"><label>Tanggal</label><input type="date" id="sft_tanggal" required></div></div>
-            <div class="form-row"><div class="form-field"><label>Shift</label><div class="shift-toggle" id="sftShiftToggle"><button type="button" class="shift-btn" data-shift="1" onclick="selectSftShift(1)">Shift 1</button><button type="button" class="shift-btn" data-shift="2" onclick="selectSftShift(2)">Shift 2</button><button type="button" class="shift-btn" data-shift="3" onclick="selectSftShift(3)">Shift 3</button></div></div></div>
-            <div class="form-row"><div class="form-field"><label>Nama Operator</label><input type="text" id="sft_nama" readonly class="readonly-field"></div></div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">autorenew</span> Regenerasi</div>
-            <div class="shift-toggle" style="margin-bottom:12px;"><button type="button" class="shift-btn" id="sftRegenNo" onclick="toggleRegen(false)" style="flex:1;">Tidak Ada Regenerasi</button><button type="button" class="shift-btn active" id="sftRegenYes" onclick="toggleRegen(true)" style="flex:1;">Ada Regenerasi</button></div>
-            <div id="sftGaramField"><div class="chem-row"><label>Pemakaian Garam</label><div class="input-with-unit"><input type="number" id="sft_garam_kg" inputmode="decimal" step="any" placeholder="0"><span class="unit-badge">kg</span></div></div></div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">sticky_note_2</span> Catatan</div><textarea id="sft_catatan" rows="3" placeholder="Catatan tambahan..."></textarea></div>
-        </form>
-        </div>
-
-        <!-- SUB-FORM 4: MAINTENANCE CHECKLIST -->
-        <div id="formMaintenance" class="input-subform">
-        <form id="maintenanceForm" onsubmit="return false;">
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">info</span> Informasi Dasar</div>
-            <div class="form-row"><div class="form-field"><label>Tanggal</label><input type="date" id="mnt_tanggal" required></div></div>
-            <div class="form-row"><div class="form-field"><label>Shift</label><div class="shift-toggle" id="mntShiftToggle"><button type="button" class="shift-btn" data-shift="1" onclick="selectMntShift(1)">Shift 1</button><button type="button" class="shift-btn" data-shift="2" onclick="selectMntShift(2)">Shift 2</button><button type="button" class="shift-btn" data-shift="3" onclick="selectMntShift(3)">Shift 3</button></div></div></div>
-            <div class="form-row"><div class="form-field"><label>Nama Operator</label><input type="text" id="mnt_nama" readonly class="readonly-field"></div></div>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">water_drop</span> Clarifier — OK / Not OK</div>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_tangki"><span class="checkmark"></span><span class="chk-label">Cek kondisi tangki</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_tangki_flokulan"><span class="checkmark"></span><span class="chk-label">Cek tangki flokulan</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_tangki_floagulan"><span class="checkmark"></span><span class="chk-label">Cek tangki floagulan</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_tangki_chemical"><span class="checkmark"></span><span class="chk-label">Cek tangki chemical</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_pompa_clarifier"><span class="checkmark"></span><span class="chk-label">Cek kondisi pompa clarifier</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_keseluruhan_proses"><span class="checkmark"></span><span class="chk-label">Cek keseluruhan proses</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_pompa_siplai_leaching"><span class="checkmark"></span><span class="chk-label">Cek pompa siplai leaching</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_filter_press_1"><span class="checkmark"></span><span class="chk-label">Cek filter press 1</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_filter_press_2"><span class="checkmark"></span><span class="chk-label">Cek filter press 2</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_kolam"><span class="checkmark"></span><span class="chk-label">Cek kondisi kolam</span></label>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">thumb_up</span> Clarifier — Good / No Good</div>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_fungsi_proses"><span class="checkmark"></span><span class="chk-label">Cek keseluruhan fungsi proses clarifier</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_clr_5r_area"><span class="checkmark"></span><span class="chk-label">Cek 5R area clarifier</span></label>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">filter_alt</span> Softener — OK / Not OK</div>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_sft_tangki_air_baku"><span class="checkmark"></span><span class="chk-label">Cek kondisi tangki air baku</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_sft_tangki_sand_filter"><span class="checkmark"></span><span class="chk-label">Cek kondisi tangki sand filter</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_sft_tangki_garam"><span class="checkmark"></span><span class="chk-label">Cek kondisi tangki garam</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_sft_tangki_softener"><span class="checkmark"></span><span class="chk-label">Cek kondisi tangki softener</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_sft_tangki_hasil"><span class="checkmark"></span><span class="chk-label">Cek kondisi tangki hasil softener</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_sft_valve_piping"><span class="checkmark"></span><span class="chk-label">Cek kondisi valve dan piping</span></label>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">thumb_up</span> Softener — Good / No Good</div>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_sft_fungsi_proses"><span class="checkmark"></span><span class="chk-label">Cek kondisi keseluruhan fungsi proses softener</span></label>
-            <label class="checkbox-row"><input type="checkbox" id="mnt_sft_5r_area"><span class="checkmark"></span><span class="chk-label">Cek 5R area softener</span></label>
-          </div>
-          <div class="form-section"><div class="section-title"><span class="material-icons-round">sticky_note_2</span> Catatan</div><textarea id="mnt_catatan" rows="3" placeholder="Catatan maintenance..."></textarea></div>
-        </form>
-        </div>
-
-        <div class="form-doodle"><svg viewBox="0 0 400 120" xmlns="http://www.w3.org/2000/svg" fill="none"><path d="M20 90 Q60 20 100 60 T180 50 T260 70 T340 40 T400 60" stroke="var(--accent)" stroke-width="2" stroke-linecap="round" opacity="0.2"/><path d="M0 80 Q50 40 100 80 T200 70 T300 85 T400 65" stroke="var(--accent)" stroke-width="1.5" stroke-linecap="round" opacity="0.12"/><circle cx="60" cy="55" r="18" stroke="var(--accent)" stroke-width="1.5" opacity="0.15"/><circle cx="60" cy="55" r="6" fill="var(--accent)" opacity="0.1"/><text x="200" y="105" text-anchor="middle" fill="var(--text-muted)" font-size="11" font-family="'IBM Plex Sans',sans-serif" opacity="0.5">WWTP Operations System v5.0</text></svg></div>
-      </div>
-
-      <!-- TAB 2: DASHBOARD -->
-      <div id="tabDashboard" class="tab-content">
-        <div class="page-header"><h2><span class="material-icons-round">dashboard</span> Dashboard Operasional</h2></div>
-        <div class="dash-filter"><div class="filter-row"><div class="filter-field"><label>Dari</label><input type="date" id="dash_start_date"></div><div class="filter-field"><label>Sampai</label><input type="date" id="dash_end_date"></div><button class="btn-sm btn-accent" onclick="loadDashboard()"><span class="material-icons-round">refresh</span></button></div></div>
-        <div class="summary-cards">
-          <div class="summary-card"><span class="material-icons-round card-icon">assignment</span><div class="card-value" id="sum_total">0</div><div class="card-label">Total Record</div></div>
-          <div class="summary-card"><span class="material-icons-round card-icon">today</span><div class="card-value" id="sum_today">0</div><div class="card-label">Hari Ini</div></div>
-          <div class="summary-card"><span class="material-icons-round card-icon">water_drop</span><div class="card-value" id="sum_hydrofloc">0</div><div class="card-label">Hydrofloc (kg)</div></div>
-          <div class="summary-card"><span class="material-icons-round card-icon">science</span><div class="card-value" id="sum_polymer">0</div><div class="card-label">Polymer (g)</div></div>
-        </div>
-        <div class="dash-subtabs"><button class="subtab-btn active" data-subtab="presentasi" onclick="switchDashSubtab('presentasi', this)"><span class="material-icons-round">analytics</span> Presentasi</button><button class="subtab-btn" data-subtab="lainnya" onclick="switchDashSubtab('lainnya', this)"><span class="material-icons-round">more_horiz</span> Lainnya</button></div>
-        <div id="dashPresentasi" class="dash-subcontent active">
-          <div class="group-nav">
-            <button class="group-btn active" onclick="switchGroup('grpClarifier',this)"><span class="material-icons-round">water_drop</span> Clarifier</button>
-            <button class="group-btn" onclick="switchGroup('grpSumur',this)"><span class="material-icons-round">opacity</span> Air Sumur</button>
-            <button class="group-btn" onclick="switchGroup('grpSoftener',this)"><span class="material-icons-round">filter_alt</span> Softener</button>
-            <button class="group-btn" onclick="switchGroup('grpPam',this)"><span class="material-icons-round">water</span> Air PAM</button>
-          </div>
-          <div id="grpClarifier" class="pres-group active">
-            <div class="group-header"><h3>Proses Clarifier</h3><div class="chart-date-filter"><input type="date" id="grp_clr_start" onchange="reloadGroupClarifier()"><span>—</span><input type="date" id="grp_clr_end" onchange="reloadGroupClarifier()"></div></div>
-            <div class="chart-card"><h3>Hasil Clarifier Harian<span class="chart-date-sub" id="dtClrDaily"></span></h3><div class="chart-date-filter"><input type="date" id="clr_daily_start" onchange="reloadClrDaily()"><span>—</span><input type="date" id="clr_daily_end" onchange="reloadClrDaily()"></div><div class="chart-wrap"><canvas id="chartClrDaily"></canvas></div></div>
-            <div class="chart-card"><h3>Rata-rata Clarifier<span class="chart-date-sub" id="dtClrAvg"></span></h3><div class="chart-wrap"><canvas id="chartClrAvg"></canvas></div></div>
-            <div class="chart-card"><h3>Rata-rata Mutu Hasil Clarifier<span class="chart-date-sub" id="dtMutuClr"></span></h3><div class="chart-wrap"><canvas id="chartMutuClr"></canvas></div><div class="chart-note"><strong>Standar baku mutu:</strong><br>TDS: &lt; 2000 ppm | pH: 6~9 | TSS: &lt; 200 ppm | Conductivity: &lt; 1400 µS/cm</div></div>
-            <div class="chart-card"><h3>Rata-rata Mutu Bak Sirkulasi Besar<span class="chart-date-sub" id="dtMutuBSB"></span></h3><div class="chart-wrap"><canvas id="chartMutuBSB"></canvas></div></div>
-            <div class="chart-card"><h3>Rata-rata Mutu Bak Sirkulasi 17-18<span class="chart-date-sub" id="dtMutuBS17"></span></h3><div class="chart-wrap"><canvas id="chartMutuBS17"></canvas></div></div>
-          </div>
-          <div id="grpSumur" class="pres-group">
-            <div class="group-header"><h3>Mutu dan Pemakaian Air Sumur</h3><div class="chart-date-filter"><input type="date" id="grp_well_start" onchange="reloadGroupWell()"><span>—</span><input type="date" id="grp_well_end" onchange="reloadGroupWell()"></div></div>
-            <div class="chart-card"><h3>Penggunaan Air Sumur Harian<span class="chart-date-sub" id="dtWellDaily"></span></h3><div class="chart-date-filter"><input type="date" id="well_daily_start" onchange="reloadWellDaily()"><span>—</span><input type="date" id="well_daily_end" onchange="reloadWellDaily()"></div><div class="chart-wrap chart-wrap-tall"><canvas id="chartWellDaily"></canvas></div></div>
-            <div class="chart-card"><h3>Rata-rata Penggunaan Air Sumur<span class="chart-date-sub" id="dtWellAvg"></span></h3><div class="chart-wrap"><canvas id="chartWellAvg"></canvas></div></div>
-            <div class="chart-card"><h3>Rata-rata Mutu Air Sumur<span class="chart-date-sub" id="dtMutuSumur"></span></h3><div class="chart-wrap chart-wrap-tall"><canvas id="chartMutuSumur"></canvas></div><div id="sumurCondNote" class="chart-note chart-note-warn"></div></div>
-          </div>
-          <div id="grpSoftener" class="pres-group">
-            <div class="group-header"><h3>Proses Softener</h3><div class="chart-date-filter"><input type="date" id="grp_sft_start" onchange="reloadGroupSoftener()"><span>—</span><input type="date" id="grp_sft_end" onchange="reloadGroupSoftener()"></div></div>
-            <div class="chart-card"><h3>Hasil Softener Harian<span class="chart-date-sub" id="dtSftDaily"></span></h3><div class="chart-date-filter"><input type="date" id="sft_daily_start" onchange="reloadSftDaily()"><span>—</span><input type="date" id="sft_daily_end" onchange="reloadSftDaily()"></div><div class="chart-wrap"><canvas id="chartSftDaily"></canvas></div></div>
-            <div class="chart-card"><h3>Rata-rata Mutu Air Softener<span class="chart-date-sub" id="dtMutuSft"></span></h3><div class="chart-wrap"><canvas id="chartMutuSft"></canvas></div></div>
-          </div>
-          <div id="grpPam" class="pres-group">
-            <div class="group-header"><h3>Mutu dan Pemakaian Air PAM</h3><div class="chart-date-filter"><input type="date" id="grp_pam_start" onchange="reloadGroupPam()"><span>—</span><input type="date" id="grp_pam_end" onchange="reloadGroupPam()"></div></div>
-            <div class="chart-card"><h3>Penggunaan Air PAM Harian<span class="chart-date-sub" id="dtPamDaily"></span></h3><div class="chart-date-filter"><input type="date" id="pam_daily_start" onchange="reloadPamDaily()"><span>—</span><input type="date" id="pam_daily_end" onchange="reloadPamDaily()"></div><div class="chart-wrap"><canvas id="chartPamDaily"></canvas></div></div>
-            <div class="chart-card"><h3>Rata-rata Mutu Air PAM<span class="chart-date-sub" id="dtMutuPam"></span></h3><div class="chart-wrap"><canvas id="chartMutuPam"></canvas></div></div>
-            <div class="chart-card"><h3>Pemakaian Air PAM<span class="chart-date-sub" id="dtPamBar"></span></h3><div class="chart-wrap"><canvas id="chartPamBar"></canvas></div></div>
-            <div class="chart-card"><h3>Total Pemakaian Air PAM per Bulan<span class="chart-date-sub" id="dtPamMonthly"></span></h3><div class="chart-wrap"><canvas id="chartPamMonthly"></canvas></div></div>
-          </div>
-        </div>
-        <div id="dashLainnya" class="dash-subcontent">
-          <div class="chart-card"><h3>Penggunaan Chemical per Hari<span class="chart-date-sub" id="dtChemical"></span></h3><div class="chart-wrap"><canvas id="chartChemical"></canvas></div></div>
-          <div class="chart-card"><h3>Checklist Proses (%)<span class="chart-date-sub" id="dtChecklist"></span></h3><div class="chart-wrap"><canvas id="chartChecklist"></canvas></div></div>
-          <div class="chart-card"><h3>Pengiriman Sample Lab (%)<span class="chart-date-sub" id="dtLab"></span></h3><div class="chart-wrap"><canvas id="chartLab"></canvas></div></div>
-          <div class="chart-card"><h3>Aktivitas per Shift<span class="chart-date-sub" id="dtShift"></span></h3><div class="chart-wrap"><canvas id="chartShift"></canvas></div></div>
+        <div class="mod-tabs" id="inputModTabs"></div>
+        <div class="meta" id="inputMeta"></div>
+        <form id="entryForm" class="entry-form" onsubmit="return false;"></form>
+        <div class="form-actions">
+          <button type="button" class="btn-line" onclick="resetInput(true)">Reset</button>
+          <button type="button" class="btn-go" onclick="submitEntry()"><span>Simpan</span><span class="arr">↗</span></button>
         </div>
       </div>
 
-      <!-- TAB 3: DATABASE — DATE RANGE FILTER + DEFAULT 10 HARI -->
-      <div id="tabDatabase" class="tab-content">
-        <div class="page-header"><h2><span class="material-icons-round">storage</span> Database Records</h2></div>
-        <div class="db-controls">
-          <div class="search-bar"><span class="material-icons-round">search</span><input type="text" id="db_search" placeholder="Cari..." oninput="debounceSearch()"></div>
-          <div class="db-filters">
-            <select id="db_filter_shift" onchange="loadRecords(1)"><option value="">Semua Shift</option><option value="1">Shift 1</option><option value="2">Shift 2</option><option value="3">Shift 3</option></select>
-            <div class="db-date-range">
-              <input type="date" id="db_filter_date_start" onchange="loadRecords(1)" title="Dari tanggal">
-              <span class="db-date-sep">—</span>
-              <input type="date" id="db_filter_date_end" onchange="loadRecords(1)" title="Sampai tanggal">
-            </div>
-            <button class="btn-sm btn-accent" onclick="clearDbFilters()" title="Reset filter"><span class="material-icons-round">clear_all</span></button>
-          </div>
+      <!-- PAGE: DATA -->
+      <div id="pgData" class="page">
+        <div class="hero"><h1 class="mega">DATA<span class="tick">’</span><span id="heroTotal">0</span></h1></div>
+        <div class="mod-tabs" id="dataModTabs"></div>
+        <div class="filters">
+          <div class="f-search"><span class="material-icons-round">search</span><input type="search" id="dq" placeholder="cari operator, catatan, ID…" oninput="debounceData()"></div>
+          <div class="f-range"><input type="date" id="dStart" onchange="loadData(1)" aria-label="Dari tanggal"><span>—</span><input type="date" id="dEnd" onchange="loadData(1)" aria-label="Sampai tanggal"></div>
+          <select id="dShift" onchange="loadData(1)" aria-label="Shift"><option value="">Semua shift</option><option value="1">Shift 1</option><option value="2">Shift 2</option><option value="3">Shift 3</option></select>
+          <button class="btn-line" onclick="resetDataFilters()">reset/</button>
         </div>
-        <div id="recordsList" class="records-list"><div class="loading-state"><div class="spinner"></div><p>Memuat data...</p></div></div>
-        <div id="pagination" class="pagination"></div>
+        <div class="list-head"><span>tanggal/</span><span>operator/</span><span>ringkasan/</span><span></span></div>
+        <div id="dataList" class="list"></div>
+        <div id="pager" class="pager"></div>
+      </div>
+
+      <!-- PAGE: REQUEST -->
+      <div id="pgRequest" class="page">
+        <div class="hero"><h1 class="mega">REQUEST<span class="tick">’</span></h1></div>
+        <div class="hero-info">
+          <div class="hi-left"><div class="seg" id="reqSeg"><button data-v="pending" onclick="setReqFilter('pending')">Menunggu</button><button data-v="all" onclick="setReqFilter('all')">Semua</button></div></div>
+          <div class="hi-right"><p id="reqNote">Perubahan &amp; penghapusan data harus disetujui approver. Request baru pada data yang sama otomatis menggantikan request sebelumnya.</p></div>
+        </div>
+        <div id="reqList" class="cards"></div>
+      </div>
+
+      <!-- PAGE: ANOMALI -->
+      <div id="pgAnomali" class="page">
+        <div class="hero"><h1 class="mega">ANOMALI<span class="tick">’</span></h1></div>
+        <div class="hero-info">
+          <div class="hi-left"><div class="seg" id="ntfSeg"><button data-v="unread" onclick="setNtfFilter('unread')">Belum ditinjau</button><button data-v="all" onclick="setNtfFilter('all')">Semua</button></div></div>
+          <div class="hi-right"><p>Selisih negatif clarifier (sesudah &lt; sebelum) dicatat otomatis saat data operasional disimpan.</p></div>
+        </div>
+        <div id="ntfList" class="cards"></div>
+      </div>
+
+      <!-- PAGE: LAPORAN -->
+      <div id="pgReport" class="page">
+        <div class="hero"><h1 class="mega">LAPORAN<span class="tick">’</span></h1></div>
+        <div class="panel-grid">
+          <section class="fs">
+            <div class="fs-head"><span class="slug">periode/</span></div>
+            <div class="fs-body grid">
+              <div class="fld"><label for="rStart">Dari tanggal</label><input type="date" id="rStart"></div>
+              <div class="fld"><label for="rEnd">Sampai tanggal</label><input type="date" id="rEnd"></div>
+            </div>
+          </section>
+          <section class="fs">
+            <div class="fs-head"><span class="slug">tipe/</span></div>
+            <div class="fs-body"><div class="seg seg-wide" id="rMode"><button data-v="periode" class="active" onclick="segPick(this)">Per Periode</button><button data-v="harian" onclick="segPick(this)">Per Hari</button></div></div>
+          </section>
+          <section class="fs">
+            <div class="fs-head"><span class="slug">format/</span></div>
+            <div class="fs-body"><div class="seg seg-wide" id="rFormat"><button data-v="sheet" class="active" onclick="segPick(this)">Sheet</button><button data-v="xlsx" onclick="segPick(this)">Excel</button><button data-v="csv" onclick="segPick(this)">CSV</button><button data-v="pdf" onclick="segPick(this)">PDF</button></div></div>
+          </section>
+        </div>
+        <div id="rStatus"></div>
+        <div class="form-actions"><button type="button" class="btn-go" onclick="runReport()"><span>Buat Laporan</span><span class="arr">↗</span></button></div>
       </div>
     </main>
 
-    <nav class="bottom-nav">
-      <button class="nav-btn active" data-tab="tabInput" onclick="switchTab('tabInput', this)"><span class="material-icons-round">edit_note</span><span>Input</span></button>
-      <button class="nav-btn" data-tab="tabDashboard" onclick="switchTab('tabDashboard', this)"><span class="material-icons-round">dashboard</span><span>Dashboard</span></button>
-      <button class="nav-btn" data-tab="tabDatabase" onclick="switchTab('tabDatabase', this)"><span class="material-icons-round">storage</span><span>Database</span></button>
+    <nav class="bnav">
+      <button class="bnav-btn needs-write" data-page="pgInput" onclick="goPage('pgInput')"><span class="material-icons-round">edit_note</span><span>Input</span></button>
+      <button class="bnav-btn" data-page="pgData" onclick="goPage('pgData')"><span class="material-icons-round">table_rows</span><span>Data</span></button>
+      <button class="bnav-btn" data-page="pgRequest" onclick="goPage('pgRequest')"><span class="material-icons-round">fact_check</span><span>Request</span><span class="badge" data-badge="req"></span></button>
+      <button class="bnav-btn" data-page="pgAnomali" onclick="goPage('pgAnomali')"><span class="material-icons-round">warning_amber</span><span>Anomali</span><span class="badge" data-badge="ntf"></span></button>
+      <button class="bnav-btn" data-page="pgReport" onclick="goPage('pgReport')"><span class="material-icons-round">description</span><span>Laporan</span></button>
     </nav>
+  </section>
+
+  <!-- SHEET (modal / bottom sheet) -->
+  <div id="sheet" class="sheet-overlay" onclick="if(event.target===this)closeSheet()">
+    <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+      <div class="sheet-head"><h3 id="sheetTitle"></h3><button class="btn-x" onclick="closeSheet()" aria-label="Tutup"><span class="material-icons-round">close</span></button></div>
+      <div class="sheet-body" id="sheetBody"></div>
+      <div class="sheet-foot" id="sheetFoot"></div>
     </div>
   </div>
 
-  <!-- MODALS -->
-  <div id="editModal" class="modal-overlay"><div class="modal-container"><div class="modal-header"><h3><span class="material-icons-round">edit</span> Edit Record</h3><button class="btn-icon" onclick="closeEditModal()"><span class="material-icons-round">close</span></button></div><div class="modal-body" id="editModalBody"></div><div class="modal-footer"><p id="editError" class="error-text"></p><div class="modal-btn-row"><button class="btn-secondary" onclick="closeEditModal()">Batal</button><button class="btn-primary" onclick="handleRequestEdit()"><span class="material-icons-round">send</span> Request Perubahan</button></div></div></div></div>
-  <div id="deleteModal" class="modal-overlay"><div class="modal-container modal-sm"><div class="modal-header modal-header-danger"><h3><span class="material-icons-round">warning</span> Konfirmasi Hapus</h3><button class="btn-icon" onclick="closeDeleteModal()"><span class="material-icons-round">close</span></button></div><div class="modal-body"><p id="deleteInfo" class="delete-info"></p><p id="deleteError" class="error-text"></p></div><div class="modal-footer"><button class="btn-secondary" onclick="closeDeleteModal()">Batal</button><button class="btn-danger" onclick="handleRequestDelete()"><span class="material-icons-round">send</span> Request Hapus</button></div></div></div>
-  <div id="detailModal" class="modal-overlay"><div class="modal-container"><div class="modal-header"><h3><span class="material-icons-round">visibility</span> Detail Record</h3><button class="btn-icon" onclick="closeDetailModal()"><span class="material-icons-round">close</span></button></div><div class="modal-body" id="detailModalBody"></div><div class="modal-footer"><button class="btn-secondary" onclick="closeDetailModal()">Tutup</button></div></div></div>
-  <div id="requestModal" class="modal-overlay"><div class="modal-container"><div class="modal-header"><h3><span class="material-icons-round">history</span> Riwayat Request</h3><button class="btn-icon" onclick="closeRequestModal()"><span class="material-icons-round">close</span></button></div><div class="modal-body" id="requestModalBody"><div class="loading-state"><div class="spinner"></div><p>Memuat...</p></div></div><div class="modal-footer"><button class="btn-secondary" onclick="closeRequestModal()">Tutup</button></div></div></div>
-  <div id="reportModal" class="modal-overlay"><div class="modal-container modal-sm"><div class="modal-header"><h3><span class="material-icons-round">download</span> Download Laporan</h3><button class="btn-icon" onclick="closeReportModal()"><span class="material-icons-round">close</span></button></div><div class="modal-body"><p style="font-size:0.85rem;color:var(--text-secondary);margin-bottom:14px;">Generate laporan operasional dan download ke perangkat Anda.</p><div class="form-field"><label>Dari Tanggal</label><input type="date" id="rpt_start"></div><div class="form-field"><label>Sampai Tanggal</label><input type="date" id="rpt_end"></div><div class="form-field" style="margin-top:12px;"><label>Tipe Laporan</label><div class="shift-toggle" id="rptModeToggle"><button type="button" class="shift-btn active" data-mode="periode" onclick="selectRptMode(this)"><span class="material-icons-round" style="font-size:16px">analytics</span> Per Periode</button><button type="button" class="shift-btn" data-mode="harian" onclick="selectRptMode(this)"><span class="material-icons-round" style="font-size:16px">today</span> Per Hari</button></div></div><div class="form-field" style="margin-top:8px;"><label>Format File</label><div class="shift-toggle" id="rptFormatToggle"><button type="button" class="shift-btn active" data-fmt="sheet" onclick="selectRptFormat(this)"><span class="material-icons-round" style="font-size:16px">tab</span> Sheet</button><button type="button" class="shift-btn" data-fmt="xlsx" onclick="selectRptFormat(this)"><span class="material-icons-round" style="font-size:16px">table_chart</span> Excel</button><button type="button" class="shift-btn" data-fmt="csv" onclick="selectRptFormat(this)"><span class="material-icons-round" style="font-size:16px">description</span> CSV</button><button type="button" class="shift-btn" data-fmt="pdf" onclick="selectRptFormat(this)"><span class="material-icons-round" style="font-size:16px">picture_as_pdf</span> PDF</button></div></div><div id="rptStatus" style="margin-top:10px;"></div></div><div class="modal-footer"><button class="btn-secondary" onclick="closeReportModal()">Batal</button><button class="btn-primary" onclick="generateReport()"><span class="material-icons-round">download</span> Download</button></div></div></div>
-  <div id="notifModal" class="modal-overlay"><div class="modal-container"><div class="modal-header"><h3><span class="material-icons-round">warning</span> Notifikasi Anomali</h3><button class="btn-icon" onclick="closeNotifModal()"><span class="material-icons-round">close</span></button></div><div class="modal-body" id="notifModalBody"><div class="loading-state"><div class="spinner"></div><p>Memuat...</p></div></div><div class="modal-footer"><button class="btn-secondary" onclick="closeNotifModal()">Tutup</button></div></div></div>
-  <div id="toast" class="toast"></div>
-  <div id="loadingOverlay" class="loading-overlay"><div class="spinner-lg"></div><p>Memproses...</p></div>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <div id="loading" class="loading"><div class="spin"></div><p class="slug">memproses/</p></div>
 
+  <script>var SERVER_INFO = <?!= serverInfoJson ?>;</script>
   <?!= include('JavaScript') ?>
 </body>
 </html>

@@ -1,24 +1,20 @@
 /**
  * ============================================
  * Code.gs — Main Entry Point
- * WWTP Operations Data Entry System
+ * WWTP Operations Data Entry System v6
  * ============================================
  */
 
 function doGet(e) {
-  return HtmlService.createTemplateFromFile('Index')
-    .evaluate()
+  var t = HtmlService.createTemplateFromFile('Index');
+  // Tanggal & shift default diambil dari waktu lokal server (zona waktu script)
+  t.serverInfoJson = JSON.stringify(getServerInfo()).replace(/</g, '\\u003c');
+  return t.evaluate()
     .setTitle('WWTP Operations System')
-    .addMetaTag('viewport', 'width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no')
+    .addMetaTag('viewport', 'width=device-width, initial-scale=1, viewport-fit=cover')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
-}
-
-function testReadRecords() {
-  var result = readRecords({page: 1, limit: 5});
-  Logger.log(JSON.stringify(result).substring(0, 500));
-  return result;
 }

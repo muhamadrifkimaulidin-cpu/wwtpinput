@@ -1,28 +1,76 @@
 /**
  * ============================================
- * SETUP.gs — Initial Setup & Sheet Creation
+ * SETUP.gs — Setup Sheet, Migrasi & Backup
  * WWTP Operations Data Entry System
- * Auto-backup before any sheet reset
  * ============================================
- * Jalankan fungsi setupAll() SEKALI saat pertama kali setup
+ * Semua fungsi setup dijalankan dari menu Spreadsheet:
+ *   WWTP Tools › Admin › Siapkan Sheet & Kolom Baru   (aman, tidak menghapus data)
+ *   WWTP Tools › Admin › Setup Ulang Semua Sheet       (RESET, backup dulu)
+ * Tidak bisa dipanggil dari web app (dicegah oleh requireUi_).
  */
 
+var DEFAULT_CONFIG_ = [
+  ['app_name', 'WWTP Operations System'],
+  ['records_per_page', '15'],
+  ['admin_email', ''],
+  ['approver_ids', 'USR005,USR006,USR003'],
+  ['pg_unit', 'bar']
+];
+
+/**
+ * Aman dijalankan kapan saja: membuat sheet modul yang belum ada,
+ * menambah kolom baru (Requests.module, Notifications.user_id),
+ * dan menambah key Config yang belum ada. Tidak menghapus data.
+ */
+function prepareSheets() {
+  var ui = requireUi_();
+  var mods = getModules_();
+  Object.keys(mods).forEach(function(k) { ensureModuleSheet_(mods[k]); });
+  ensureSheet_('Requests', REQ_HEADERS_);
+  ensureSheet_('Notifications', NTF_HEADERS_);
+  var added = ensureConfigDefaults_();
+  invalidateConfig_();
+  invalidateUsersCache();
+  ui.alert('Selesai', 'Sheet modul & kolom baru siap.' + (added.length ? '\nKey Config ditambahkan: ' + added.join(', ') : ''), ui.ButtonSet.OK);
+}
+
+function ensureConfigDefaults_() {
+  var sh = ensureSheet_('Config', ['key', 'value']);
+  var data = sh.sheet.getDataRange().getValues();
+  var keys = data.map(function(r) { return String(r[0]); });
+  var added = [];
+  DEFAULT_CONFIG_.forEach(function(kv) {
+    if (keys.indexOf(kv[0]) < 0) { sh.sheet.appendRow(kv); added.push(kv[0]); }
+  });
+  return added;
+}
+
 function setupAll() {
-  setupUsersSheet();
-  setupDataOpsSheet();
-  setupDataQualitySheet();
-  setupConfigSheet();
-  setupRequestsSheet();
-  setupNotificationsSheet();
-  SpreadsheetApp.getActive().toast('Setup selesai! Semua sheet di-backup & dibuat ulang.', 'Setup Complete', 5);
+  var ui = requireUi_();
+  var resp = ui.alert('Setup Ulang Semua Sheet',
+    'Sheet Users, DataOps, DataQuality, Config, Requests, Notifications akan di-backup lalu DIBUAT ULANG (kosong).\n\nLanjutkan?',
+    ui.ButtonSet.YES_NO);
+  if (resp !== ui.Button.YES) return;
+  var pwds = setupUsersSheet_();
+  setupDataOpsSheet_();
+  setupDataQualitySheet_();
+  setupConfigSheet_();
+  mkSheet_('Requests', REQ_HEADERS_);
+  mkSheet_('Notifications', NTF_HEADERS_);
+  var mods = getModules_();
+  Object.keys(mods).forEach(function(k) { ensureModuleSheet_(mods[k]); });
+  invalidateUsersCache();
+  invalidateConfig_();
+  ui.alert('Setup selesai',
+    'Password sementara (bagikan secara pribadi, lalu ganti di sheet Users + menu Amankan Password):\n\n' + pwds.join('\n'),
+    ui.ButtonSet.OK);
 }
 
 function backupSheet_(sheetName) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var sheet = ss.getSheetByName(sheetName);
   if (!sheet || sheet.getLastRow() <= 1) return false;
-  var tz = Session.getScriptTimeZone();
-  var ts = Utilities.formatDate(new Date(), tz, 'yyyyMMdd_HHmmss');
+  var ts = fmtDate_(new Date(), 'yyyyMMdd_HHmmss');
   var backupName = 'BACKUP_' + sheetName + '_' + ts;
   var backup = sheet.copyTo(ss);
   backup.setName(backupName);
@@ -45,33 +93,27 @@ function mkSheet_(name, headers, data) {
   return sheet;
 }
 
-function setupUsersSheet() {
-  mkSheet_('Users', ['user_id','nama','password','role','active'], [
-    ['USR001','Dede Rudiyana','operator123','operator',true],
-    ['USR002','Muhammad Lukman','operator123','operator',true],
-    ['USR003','Hari Nuralam','operator123','operator',true],
-    ['USR004','Tia Kurniawan','operator123','operator',true],
-    ['USR008','Wisnu Suryana','operator123','operator',true],
-    ['USR005','Rifki M.','admin123','admin',true],
-    ['USR006','Taryana','admin123','admin',true],
-    ['USR007','Visitor','visitor123','visitor',true]
-  ]);
+/** Users dibuat dengan password acak (disimpan sebagai hash). Return daftar 'Nama: password'. */
+function setupUsersSheet_() {
+  var seed = [
+    ['USR001', 'Dede Rudiyana', 'operator'], ['USR002', 'Muhammad Lukman', 'operator'],
+    ['USR003', 'Hari Nuralam', 'operator'], ['USR004', 'Tia Kurniawan', 'operator'],
+    ['USR008', 'Wisnu Suryana', 'operator'], ['USR005', 'Rifki M.', 'admin'],
+    ['USR006', 'Taryana', 'admin'], ['USR007', 'Visitor', 'visitor']
+  ];
+  var list = [], rows = [];
+  seed.forEach(function(u) {
+    var pwd = Utilities.getUuid().replace(/-/g, '').substring(0, 10);
+    list.push(u[1] + ': ' + pwd);
+    rows.push([u[0], u[1], hashPassword_(pwd), u[2], true]);
+  });
+  mkSheet_('Users', ['user_id', 'nama', 'password', 'role', 'active'], rows);
+  return list;
 }
-function setupDataOpsSheet() {
-  mkSheet_('DataOps', [
-    'record_id','timestamp','tanggal','shift','nama_operator','user_id',
-    'chk_mg17_18','chk_clarifier','chk_fe_removal','chk_bak_sirkulasi_besar',
-    'clr_bak_sirkulasi_before','clr_bak_sirkulasi_after',
-    'clr_sungai_before','clr_sungai_after','clr_mg17_18_before','clr_mg17_18_after',
-    'fm_softener_lt3','fm_flotation','fm_mg16','fm_pam','fm_pam_shift',
-    'fm_sm1','fm_sm2','fm_sm3','fm_sm4','fm_sm5','fm_sm6',
-    'filter_press_batch','bongkar_lumpur',
-    'lab_clarifier','lab_mg17_18','lab_bak_sirkulasi','lab_demin','lab_pam',
-    'lab_sm1','lab_sm2','lab_sm3','lab_sm4','lab_sm5','lab_sm6','lab_tanggal',
-    'chem_hydrofloc_kg','chem_polymer_g','pekerjaan_tambahan','catatan','fm_leaching'
-  ]);
-}
-function setupDataQualitySheet() {
+
+function setupDataOpsSheet_() { mkSheet_('DataOps', getModule_('ops').keys); }
+
+function setupDataQualitySheet_() {
   mkSheet_('DataQuality', [
     'qc_id','timestamp','tanggal','nama_operator','user_id',
     'clr_ph','clr_conductivity','clr_tss','clr_tds',
@@ -84,58 +126,11 @@ function setupDataQualitySheet() {
     'sft_ph','sft_conductivity','sft_hardness'
   ]);
 }
-function setupConfigSheet() {
-  mkSheet_('Config', ['key','value'], [
-    ['app_name','WWTP Operations System'],['delete_password','wwtpmonokem'],
-    ['records_per_page','15'],['shift1_start','6'],['shift1_end','14'],
-    ['shift2_start','14'],['shift2_end','22'],
-    ['admin_email','rifki@example.com']
-  ]);
-}
-function setupRequestsSheet() {
-  mkSheet_('Requests', ['request_id','timestamp','type','record_id','record_info','requester_name','requester_id','status','edit_data','approver','resolved_at','reason']);
-}
-function setupNotificationsSheet() {
-  mkSheet_('Notifications', ['notif_id','timestamp','type','record_id','tanggal','shift','operator_name','field','before_val','after_val','diff','status','resolved_by','resolved_at','notes']);
-}
 
-// ============ NEW MODULES ============
-
-function setupDataProsesClarifierSheet() {
-  var waktu = ['07','12','15','19','23','03'];
-  var suffixes = ['_rotameter','_flowmeter','_stroke_naoh','_stroke_hidroflok','_stroke_superflok','_ph','_visual_flokulasi','_visual_air','_batch_lumpur'];
-  var cols = ['record_id','timestamp','tanggal','shift','nama_operator','user_id',
-    'prep_naoh_flake_kg','prep_hidroflok_kg','prep_superflok_g',
-    'prep_air_naoh_l','prep_air_hidroflok_l','prep_air_superflok_l',
-    'prep_pompa_ok','prep_tangki_ok','prep_keterangan'];
-  for (var w = 0; w < waktu.length; w++) {
-    for (var s = 0; s < suffixes.length; s++) {
-      cols.push('p' + waktu[w] + suffixes[s]);
-    }
-  }
-  cols.push('catatan');
-  mkSheet_('DataProsesClarifier', cols);
-}
-
-function setupDataProsesSoftenerSheet() {
-  mkSheet_('DataProsesSoftener', [
-    'record_id','timestamp','tanggal','shift','nama_operator','user_id',
-    'regenerasi','garam_kg','catatan'
-  ]);
-}
-
-function setupDataMaintenanceSheet() {
-  mkSheet_('DataMaintenance', [
-    'record_id','timestamp','tanggal','shift','nama_operator','user_id',
-    'mnt_clr_tangki','mnt_clr_tangki_flokulan','mnt_clr_tangki_floagulan','mnt_clr_tangki_chemical',
-    'mnt_clr_pompa_clarifier','mnt_clr_keseluruhan_proses','mnt_clr_pompa_siplai_leaching',
-    'mnt_clr_filter_press_1','mnt_clr_filter_press_2','mnt_clr_kolam',
-    'mnt_clr_fungsi_proses','mnt_clr_5r_area',
-    'mnt_sft_tangki_air_baku','mnt_sft_tangki_sand_filter','mnt_sft_tangki_garam',
-    'mnt_sft_tangki_softener','mnt_sft_tangki_hasil','mnt_sft_valve_piping',
-    'mnt_sft_fungsi_proses','mnt_sft_5r_area',
-    'mnt_catatan'
-  ]);
+function setupConfigSheet_() {
+  mkSheet_('Config', ['key', 'value'], DEFAULT_CONFIG_.concat([
+    ['shift1_start', '6'], ['shift1_end', '14'], ['shift2_start', '14'], ['shift2_end', '22']
+  ]));
 }
 
 // ============================================
@@ -186,7 +181,7 @@ function dailyAutoBackup() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   var tz = Session.getScriptTimeZone();
   var today = Utilities.formatDate(new Date(), tz, 'yyyyMMdd');
-  var sheetsToBackup = ['DataOps', 'DataQuality', 'Requests', 'Notifications'];
+  var sheetsToBackup = ['DataOps', 'DataQuality', 'Requests', 'Notifications', 'DataProsesClarifier', 'DataProsesSoftener', 'DataMaintenance', 'DataPressureGauge'];
   var backupSS = getOrCreateBackupSS_();
   var count = 0;
   sheetsToBackup.forEach(function(name) {
@@ -220,16 +215,23 @@ function cleanOldBackups_(backupSS, maxDays) {
 }
 
 function setupDailyBackupTrigger() {
-  removeDailyBackupTrigger();
+  requireUi_();
+  removeBackupTriggers_();
   var backupSS = getOrCreateBackupSS_();
   ScriptApp.newTrigger('dailyAutoBackup').timeBased().everyDays(1).atHour(5).create();
   SpreadsheetApp.getUi().alert('Auto-Backup Aktif',
     'Backup harian berhasil diaktifkan.\n\nJadwal: Setiap hari jam 05:00 WIB\nTujuan: ' + backupSS.getName() +
-    '\nSheet: DataOps, DataQuality, Requests, Notifications\nRetensi: 30 hari\n\nURL backup:\n' + backupSS.getUrl(),
+    '\nSheet: DataOps, DataQuality, Requests, Notifications, FIK, Softener, Maintenance, Pressure Gauge\nRetensi: 30 hari\n\nURL backup:\n' + backupSS.getUrl(),
     SpreadsheetApp.getUi().ButtonSet.OK);
 }
 
 function removeDailyBackupTrigger() {
+  var ui = requireUi_();
+  removeBackupTriggers_();
+  ui.alert('Auto-Backup Nonaktif', 'Trigger backup harian dihapus.', ui.ButtonSet.OK);
+}
+
+function removeBackupTriggers_() {
   var triggers = ScriptApp.getProjectTriggers();
   for (var i = 0; i < triggers.length; i++) {
     if (triggers[i].getHandlerFunction() === 'dailyAutoBackup') ScriptApp.deleteTrigger(triggers[i]);
@@ -237,6 +239,7 @@ function removeDailyBackupTrigger() {
 }
 
 function listBackups() {
+  requireUi_();
   try {
     var backupSS = getOrCreateBackupSS_();
     var sheets = backupSS.getSheets();
@@ -252,6 +255,7 @@ function listBackups() {
 }
 
 function openBackupSpreadsheet() {
+  requireUi_();
   try {
     var backupSS = getOrCreateBackupSS_();
     var html = '<script>window.open("' + backupSS.getUrl() + '");google.script.host.close();</script>';
