@@ -154,7 +154,7 @@ function writeOpsHarian_(sh, r, F, ops) {
     'Sungai Before','Sungai After','Sungai Δ',
     'MG17-18 Before','MG17-18 After','MG Δ',
     'FM Softener','FM Flotation','FM MG16','FM PAM','FM PAM/shift',
-    'FM Sm1','FM Sm2','FM Sm3','FM Sm4','FM Sm5','FM Sm6',
+    'FM Sm1','FM Sm2','FM Sm3','FM Sm4','FM Sm5','FM Sm6','FM Leaching',
     'Hydrofloc (kg)','Polymer (g)',
     'Batch FP','Bongkar Lumpur',
     'Tgl Lab','Lab CLR','Lab MG','Lab BSir','Lab Dem','Lab PAM',
@@ -174,7 +174,7 @@ function writeOpsHarian_(sh, r, F, ops) {
       sB, sA, rd_(sA-sB),
       mB, mA, rd_(mA-mB),
       pf_(rc.fm_softener_lt3), pf_(rc.fm_flotation), pf_(rc.fm_mg16), pf_(rc.fm_pam), pf_(rc.fm_pam_shift),
-      pf_(rc.fm_sm1), pf_(rc.fm_sm2), pf_(rc.fm_sm3), pf_(rc.fm_sm4), pf_(rc.fm_sm5), pf_(rc.fm_sm6),
+      pf_(rc.fm_sm1), pf_(rc.fm_sm2), pf_(rc.fm_sm3), pf_(rc.fm_sm4), pf_(rc.fm_sm5), pf_(rc.fm_sm6), pf_(rc.fm_leaching),
       pf_(rc.chem_hydrofloc_kg), pf_(rc.chem_polymer_g),
       rc.filter_press_batch||'', rc.bongkar_lumpur||'',
       rc.lab_tanggal||'', ck(rc.lab_clarifier), ck(rc.lab_mg17_18), ck(rc.lab_bak_sirkulasi), ck(rc.lab_demin), ck(rc.lab_pam),
@@ -250,11 +250,11 @@ function writeOpsPeriode_(sh, r, F, ops, tz) {
 
   // A4: Flow Meter per shift
   r = label_(sh, r, 'A4. FLOW METER (Per Shift)', F);
-  r = writeHeader_(sh, r, ['Tanggal','Shift','Softener','Flotation','MG16','PAM','PAM/shift','Sm1','Sm2','Sm3','Sm4','Sm5','Sm6'], F);
+  r = writeHeader_(sh, r, ['Tanggal','Shift','Softener','Flotation','MG16','PAM','PAM/shift','Sm1','Sm2','Sm3','Sm4','Sm5','Sm6','Leaching'], F);
   var fmD = recs.map(function(rc) {
     return [rc._dd, rc.shift, pf_(rc.fm_softener_lt3), pf_(rc.fm_flotation), pf_(rc.fm_mg16),
       pf_(rc.fm_pam), pf_(rc.fm_pam_shift),
-      pf_(rc.fm_sm1), pf_(rc.fm_sm2), pf_(rc.fm_sm3), pf_(rc.fm_sm4), pf_(rc.fm_sm5), pf_(rc.fm_sm6)];
+      pf_(rc.fm_sm1), pf_(rc.fm_sm2), pf_(rc.fm_sm3), pf_(rc.fm_sm4), pf_(rc.fm_sm5), pf_(rc.fm_sm6), pf_(rc.fm_leaching)];
   });
   r = writeRows_(sh, r, fmD);
   r++;
